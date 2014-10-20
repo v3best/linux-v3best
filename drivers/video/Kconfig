@@ -2210,6 +2210,16 @@ config FB_XILINX
 	  framebuffer. ML300 carries a 640*480 LCD display on the board,
 	  ML403 uses a standard DB15 VGA connector.
 
+config FB_V3BEST
+	tristate "V3best frame buffer support"
+	depends on FB && (ARCH_ZYNQ)
+	select FB_CFB_FILLRECT
+	select FB_CFB_COPYAREA
+	select FB_CFB_IMAGEBLIT
+	---help---
+	  Include support for the V3best ZingRDK ZingSK Snowleo reference 
+	  design framebuffer.
+
 config FB_COBALT
 	tristate "Cobalt server LCD frame buffer support"
 	depends on FB && (MIPS_COBALT || MIPS_SEAD3)

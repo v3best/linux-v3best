@@ -128,6 +128,31 @@
 			i2c-clk = <100000>;
 		};
 
+		spi0: spi@e0006000 {
+			compatible = "xlnx,ps7-spi-1.00.a";
+			reg = <0xE0006000 0x1000>;
+			interrupts = <0 26 4>;
+			interrupt-parent = <&gic>;
+			speed-hz = <166666700>;
+			bus-num = <0>;
+			num-chip-select = <4>;
+
+			#address-cells = <1>;
+			#size-cells = <0>;
+		};
+
+		i2c1: i2c@e0005000 {
+			compatible = "xlnx,ps7-i2c-1.00.a";
+			reg = <0xE0005000 0x1000>;
+			interrupts = < 0 48 4 >;
+			interrupt-parent = <&gic>;
+			bus-id = <1>;
+			input-clk = <133000000>;
+			i2c-clk = <100000>;
+
+			#address-cells = <1>;
+			#size-cells = <0>;
+		};
 		sdhci@e0100000 {
 			compatible = "xlnx,ps7-sdhci-1.00.a";
 			reg = <0xe0100000 0x1000>;
@@ -142,9 +167,9 @@
 			reg = <0xe0002000 0x1000>;
 			interrupts = <0 21 4>;
 			interrupt-parent = <&gic>;
-			//dr_mode = "host";
+			dr_mode = "host";
 			//dr_mode = "peripheral";
-			dr_mode = "otg";
+			//dr_mode = "otg";
 			phy_type = "ulpi";
 		};
 
@@ -200,218 +225,25 @@
 			interrupt-parent = <&gic>;
 		};
 
-		axi_sobel_0: axi-sobel@0x400D0000 {
-			compatible = "xlnx,axi-sobel-1.00.a";
-			reg = < 0x400D0000 0xFFFF>;
-			interrupts = <0 55 4>;
-			interrupt-parent = <&gic>;
-		} ;
+		hdmi@41230000 {
+			compatible = "v3best,hdmi-out-1.00.a";
+			reg = <0x41220000 0x40>;
+			v3best,xres = <1920>;
+			v3best,yres = <1080>;
+			v3best,xvirt = <1920>;
+			v3best,yvirt = <4320>;
+			v3best,hbp = <0x94>;
+			v3best,hfb = <0x58>;
+			v3best,hsync = <0x2C>;
+			v3best,h_active = <1920>;
+			v3best,vbp = <0x24>;
+			v3best,vfb = <0x04>;
+			v3best,vsync = <0x05>;
+			v3best,v_active = <1080>;
 
-		axi_vdma_0: axivdma@0x40090000 {
-			#address-cells = <1>;
-			#size-cells = <1>;
-			compatible = "xlnx,axi-vdma";
-			ranges = < 0x40090000 0x40090000 0xFFFF >;
-			reg = < 0x40090000 0xFFFF >;
-			xlnx,flush-fsync = <0x1>;
-			xlnx,include-sg = <0x0>;
-			xlnx,num-fstores = <0x3>;
-			xlnx,family = "zynq-770";
-			dma-channel@0x40090000 {
-				compatible = "xlnx,axi-vdma-s2mm-channel";
-				interrupt-parent = <&gic>;
-				interrupts = < 0 58 4 >;
-				xlnx,datawidth = <0x08>;
-				xlnx,genlock-mode = <0x0>;
-				xlnx,include-dre = <0x1>;
-				xlnx,device-id = <0x0>;
-			} ;
-		} ;
-
-		axi_vdma_1: axivdma@0x400B0000 {
-			#address-cells = <1>;
-			#size-cells = <1>;
-			compatible = "xlnx,axi-vdma";
-			ranges = < 0x400B0000 0x400B0000 0xFFFF >;
-			reg = < 0x400B0000 0xFFFF >;
-			xlnx,flush-fsync = <0x1>;
-			xlnx,include-sg = <0x0>;
-			xlnx,num-fstores = <0x3>;
-			xlnx,family = "zynq-770";
-			dma-s2mmchannel@0x400B0000 {
-				compatible = "xlnx,axi-vdma-s2mm-channel";
-				interrupt-parent = <&gic>;
-				interrupts = < 0 57 4 >;
-				xlnx,datawidth = <0x08>;
-				xlnx,genlock-mode = <0x0>;
-				xlnx,include-dre = <0x1>;
-				xlnx,device-id = <0x1>;
-			} ;
-			dma-mm2schannel@0x400B0000 {
-				compatible = "xlnx,axi-vdma-mm2s-channel";
-				interrupt-parent = <&gic>;
-				interrupts = < 0 56 4 >;
-				xlnx,datawidth = <0x08>;
-				xlnx,genlock-mode = <0x0>;
-				xlnx,include-dre = <0x1>;
-				xlnx,device-id = <0x1>;
-			} ;
-		} ;
-
-		logicvc0: logicvc@40030000 {
-			compatible = "xylon,logicvc-2.05.b", "xylon,logicvc-2.05.c", "xylon,logicvc-3.00.a";
-			reg = <0x40030000 0x6000>;
-			interrupt-parent = <&gic>;
-			interrupts = < 0 59 4 >;
-			buffer-0-offset = <1080>;
-			buffer-1-offset = <1080>;
-			buffer-2-offset = <1080>;
-			buffer-3-offset = <1080>;
-			buffer-4-offset = <1080>;
-			display-interface = <0>;
-			e-data-width = <24>;
-			e-layer = <0>;
-			interconnect-m-axi-arb-priority = <0xf>;
-			ip-license-type = <0>;
-			ip-major-revision = <2>;
-			ip-minor-revision = <5>;
-			ip-patch-level = <0>;
-			layer-0-alpha-mode = <0>;
-			layer-0-data-width = <16>;
-			xlnx,layer-0-alpha-mode = <0>;
-			xlnx,layer-0-data-width = <16>;
-			layer-0-offset = <0x0>;
-			layer-1-alpha-mode = <0>;
-			layer-1-data-width = <24>;
-			xlnx,layer-1-alpha-mode = <0>;
-			xlnx,layer-1-data-width = <24>;
-			layer-1-offset = <3240>;
-			layer-2-alpha-mode = <0>;
-			layer-2-data-width = <24>;
-			xlnx,layer-2-alpha-mode = <0>;
-			xlnx,layer-2-data-width = <24>;
-			layer-2-offset = <6480>;
-			layer-3-alpha-mode = <0>;
-			layer-3-data-width = <24>;
-			xlnx,layer-3-alpha-mode = <0>;
-			xlnx,layer-3-data-width = <24>;
-			layer-3-offset = <9720>;
-			layer-4-alpha-mode = <0>;
-			layer-4-data-width = <24>;
-			layer-4-offset = <12960>;
-			little-endian = <1>;
-			lvds-data-width = <4>;
-			mem-burst = <4>;
-			mplb-awidth = <32>;
-			mplb-dwidth = <64>;
-			mplb-native-dwidth = <32>;
-			mplb-num-masters = <8>;
-			mplb-p2p = <0>;
-			mplb-priority = <3>;
-			mplb-smallest-slave = <32>;
-			mplb-support-bursts = <1>;
-			xlnx,num-of-layers = <3>;
-			pixel-data-width = <24>;
-			readable-regs = <1>;
-			regs-interface = <2>;
-			regs-little-endian = <1>;
-			row-stride = <2048>;
-			xlnx,use-background = <1>;
-			use-e-rgb-input = <0>;
-			use-e-vclk-bufgmux = <1>;
-			use-io-hw-serializer = <0>;
-			use-multiplier = <2>;
-			use-serialized-blender = <0>;
-			use-size-position = <1>;
-			use-xtreme-dsp = <2>;
-			xlnx,vmem-baseaddr = <0x18000000>;
-			xlnx,vmem-highaddr = <0x1C000000>;
-			vmem-data-bus-width = <64>;
-			vmem-interface = <2>;
-		};
-
-		xylon-video-params {
-			xlnx,pixel-data-invert = <0>;
-			xlnx,pixel-clock-active-high = <1>;
-			xlnx,pixel-component-format = "ARGB";
-			xlnx,pixel-component-layer = <0>,<1>;
-			active-layer = <0>;
-			videomode = "1920x1080";
-			640x480 {
-				name = "640x480";
-				refresh = <60>;
-				xres = <640>;
-				yres = <480>;
-				pixclock-khz = <25152>;
-				left-margin = <48>;
-				right-margin = <16>;
-				upper-margin = <31>;
-				lower-margin = <11>;
-				hsync-len = <96>;
-				vsync-len = <2>;
-				sync = <0>;
-				vmode = <0>;
-			};
-			800x480 {
-				name = "800x480";
-				refresh = <60>;
-				xres = <800>;
-				yres = <480>;
-				pixclock-khz = <30000>;
-				left-margin = <40>;
-				right-margin = <40>;
-				upper-margin = <29>;
-				lower-margin = <13>;
-				hsync-len = <48>;
-				vsync-len = <3>;
-				sync = <0>;
-				vmode = <0>;
-			};
-			1280x720 {
-				name = "1280x720";
-				refresh = <60>;
-				xres = <1280>;
-				yres = <720>;
-				pixclock-khz = <74250>;
-				left-margin = <220>;
-				right-margin = <110>;
-				upper-margin = <20>;
-				lower-margin = <5>;
-				hsync-len = <40>;
-				vsync-len = <5>;
-				sync = <0>;
-				vmode = <0>;
-			};
-			1680x1050 {
-				name = "1680x1050";
-				refresh = <60>;
-				xres = <1680>;
-				yres = <1050>;
-				pixclock-khz = <119000>;
-				left-margin = <80>;
-				right-margin = <48>;
-				upper-margin = <21>;
-				lower-margin = <3>;
-				hsync-len = <32>;
-				vsync-len = <6>;
-				sync = <0>;
-				vmode = <0>;
-			};
-			1920x1080 {
-				name = "1920x1080";
-				refresh = <60>;
-				xres = <1920>;
-				yres = <1080>;
-				pixclock-khz = <148500>;
-				left-margin = <148>;
-				right-margin = <88>;
-				upper-margin = <36>;
-				lower-margin = <4>;
-				hsync-len = <44>;
-				vsync-len = <5>;
-				sync = <0>;
-				vmode = <0>;
-			};
+			v3best,fbphy = <0x18000000>;
+			//interrupts = <0 7 4>;
+			//interrupt-parent = <&gic>;
 		};
 	};
 };
