@@ -33,8 +33,11 @@
 #define IXGBE_DEV_ID_X540_VF            0x1515
 
 #define IXGBE_VF_IRQ_CLEAR_MASK         7
-#define IXGBE_VF_MAX_TX_QUEUES          1
-#define IXGBE_VF_MAX_RX_QUEUES          1
+#define IXGBE_VF_MAX_TX_QUEUES          8
+#define IXGBE_VF_MAX_RX_QUEUES          8
+
+/* DCB define */
+#define IXGBE_VF_MAX_TRAFFIC_CLASS	8
 
 /* Link speed */
 typedef u32 ixgbe_link_speed;
@@ -180,6 +183,7 @@ typedef u32 ixgbe_link_speed;
 #define IXGBE_TXD_CMD_DEXT   0x20000000 /* Descriptor extension (0 = legacy) */
 #define IXGBE_TXD_CMD_VLE    0x40000000 /* Add VLAN tag */
 #define IXGBE_TXD_STAT_DD    0x00000001 /* Descriptor Done */
+#define IXGBE_TXD_CMD	     (IXGBE_TXD_CMD_EOP | IXGBE_TXD_CMD_RS)
 
 /* Transmit Descriptor - Advanced */
 union ixgbe_adv_tx_desc {
@@ -272,5 +276,23 @@ struct ixgbe_adv_tx_context_desc {
 /* Error Codes */
 #define IXGBE_ERR_INVALID_MAC_ADDR              -1
 #define IXGBE_ERR_RESET_FAILED                  -2
+#define IXGBE_ERR_INVALID_ARGUMENT              -3
+
+/* Transmit Config masks */
+#define IXGBE_TXDCTL_ENABLE		0x02000000 /* Ena specific Tx Queue */
+#define IXGBE_TXDCTL_SWFLSH		0x04000000 /* Tx Desc. wr-bk flushing */
+#define IXGBE_TXDCTL_WTHRESH_SHIFT	16	   /* shift to WTHRESH bits */
+
+#define IXGBE_DCA_RXCTRL_DESC_DCA_EN	(1 << 5)  /* Rx Desc enable */
+#define IXGBE_DCA_RXCTRL_HEAD_DCA_EN	(1 << 6)  /* Rx Desc header ena */
+#define IXGBE_DCA_RXCTRL_DATA_DCA_EN	(1 << 7)  /* Rx Desc payload ena */
+#define IXGBE_DCA_RXCTRL_DESC_RRO_EN	(1 << 9)  /* Rx rd Desc Relax Order */
+#define IXGBE_DCA_RXCTRL_DATA_WRO_EN	(1 << 13) /* Rx wr data Relax Order */
+#define IXGBE_DCA_RXCTRL_HEAD_WRO_EN	(1 << 15) /* Rx wr header RO */
+
+#define IXGBE_DCA_TXCTRL_DESC_DCA_EN	(1 << 5)  /* DCA Tx Desc enable */
+#define IXGBE_DCA_TXCTRL_DESC_RRO_EN	(1 << 9)  /* Tx rd Desc Relax Order */
+#define IXGBE_DCA_TXCTRL_DESC_WRO_EN	(1 << 11) /* Tx Desc writeback RO bit */
+#define IXGBE_DCA_TXCTRL_DATA_RRO_EN	(1 << 13) /* Tx rd data Relax Order */
 
 #endif /* _IXGBEVF_DEFINES_H_ */

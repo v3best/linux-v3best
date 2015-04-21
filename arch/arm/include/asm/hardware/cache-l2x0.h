@@ -89,18 +89,28 @@
 #define L2X0_AUX_CTRL_ASSOCIATIVITY_SHIFT	16
 #define L2X0_AUX_CTRL_WAY_SIZE_SHIFT		17
 #define L2X0_AUX_CTRL_WAY_SIZE_MASK		(0x7 << 17)
+#define L2X0_AUX_CTRL_WAY_SIZE64K_MASK		(0x3 << 17)
 #define L2X0_AUX_CTRL_SHARE_OVERRIDE_SHIFT	22
+#define L2X0_AUX_CTRL_SHARE_OVERRIDE_EN_MASK	BIT(22)
+#define L2X0_AUX_CTRL_REPLACE_POLICY_RR_MASK	BIT(25)
 #define L2X0_AUX_CTRL_NS_LOCKDOWN_SHIFT		26
 #define L2X0_AUX_CTRL_NS_INT_CTRL_SHIFT		27
 #define L2X0_AUX_CTRL_DATA_PREFETCH_SHIFT	28
+#define L2X0_AUX_CTRL_DATA_PREFETCH_EN_MASK	BIT(28)
 #define L2X0_AUX_CTRL_INSTR_PREFETCH_SHIFT	29
+#define L2X0_AUX_CTRL_INSTR_PREFETCH_EN_MASK	BIT(29)
 #define L2X0_AUX_CTRL_EARLY_BRESP_SHIFT		30
+#define L2X0_AUX_CTRL_EARLY_BRESP_EN_MASK	BIT(30)
 
 #define L2X0_LATENCY_CTRL_SETUP_SHIFT	0
 #define L2X0_LATENCY_CTRL_RD_SHIFT	4
 #define L2X0_LATENCY_CTRL_WR_SHIFT	8
 
 #define L2X0_ADDR_FILTER_EN		1
+
+#define L2X0_CTRL_EN			1
+
+#define L2X0_WAY_SIZE_SHIFT		3
 
 #ifndef __ASSEMBLY__
 extern void __init l2x0_init(void __iomem *base, u32 aux_val, u32 aux_mask);
@@ -126,6 +136,8 @@ struct l2x0_regs {
 	unsigned long filter_end;
 	unsigned long prefetch_ctrl;
 	unsigned long pwr_ctrl;
+	unsigned long ctrl;
+	unsigned long aux2_ctrl;
 };
 
 extern struct l2x0_regs l2x0_saved_regs;

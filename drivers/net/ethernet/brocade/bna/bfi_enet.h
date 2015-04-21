@@ -472,7 +472,8 @@ enum bfi_enet_hds_type {
 
 struct bfi_enet_rx_cfg {
 	u8		rxq_type;
-	u8		rsvd[3];
+	u8		rsvd[1];
+	u16		frame_size;
 
 	struct {
 		u8			max_header_size;
@@ -787,6 +788,7 @@ struct bfi_enet_stats_bpc {
 
 /* MAC Rx Statistics */
 struct bfi_enet_stats_mac {
+	u64 stats_clr_cnt;	/* times this stats cleared */
 	u64 frame_64;		/* both rx and tx counter */
 	u64 frame_65_127;		/* both rx and tx counter */
 	u64 frame_128_255;		/* both rx and tx counter */

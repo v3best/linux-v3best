@@ -15,9 +15,10 @@
 #ifndef __ARCH_MVEBU_COMMON_H
 #define __ARCH_MVEBU_COMMON_H
 
-void mvebu_restart(char mode, const char *cmd);
+#include <linux/reboot.h>
 
-void armada_370_xp_init_irq(void);
-void armada_370_xp_handle_irq(struct pt_regs *regs);
+void mvebu_restart(enum reboot_mode mode, const char *cmd);
+
+void armada_xp_cpu_die(unsigned int cpu);
 
 #endif

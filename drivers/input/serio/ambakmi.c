@@ -10,7 +10,6 @@
  * (at your option) any later version.
  */
 #include <linux/module.h>
-#include <linux/init.h>
 #include <linux/serio.h>
 #include <linux/errno.h>
 #include <linux/interrupt.h>
@@ -80,7 +79,8 @@ static int amba_kmi_open(struct serio *io)
 	writeb(divisor, KMICLKDIV);
 	writeb(KMICR_EN, KMICR);
 
-	ret = request_irq(kmi->irq, amba_kmi_int, 0, "kmi-pl050", kmi);
+	ret = request_irq(kmi->irq, amba_kmi_int, IRQF_SHARED, "kmi-pl050",
+			  kmi);
 	if (ret) {
 		printk(KERN_ERR "kmi: failed to claim IRQ%d\n", kmi->irq);
 		writeb(0, KMICR);
@@ -107,7 +107,7 @@ static void amba_kmi_close(struct serio *io)
 	clk_disable_unprepare(kmi->clk);
 }
 
-static int __devinit amba_kmi_probe(struct amba_device *dev,
+static int amba_kmi_probe(struct amba_device *dev,
 	const struct amba_id *id)
 {
 	struct amba_kmi_port *kmi;
@@ -163,11 +163,9 @@ static int __devinit amba_kmi_probe(struct amba_device *dev,
 	return ret;
 }
 
-static int __devexit amba_kmi_remove(struct amba_device *dev)
+static int amba_kmi_remove(struct amba_device *dev)
 {
 	struct amba_kmi_port *kmi = amba_get_drvdata(dev);
-
-	amba_set_drvdata(dev, NULL);
 
 	serio_unregister_port(kmi->io);
 	clk_put(kmi->clk);
@@ -204,7 +202,7 @@ static struct amba_driver ambakmi_driver = {
 	},
 	.id_table	= amba_kmi_idtable,
 	.probe		= amba_kmi_probe,
-	.remove		= __devexit_p(amba_kmi_remove),
+	.remove		= amba_kmi_remove,
 	.resume		= amba_kmi_resume,
 };
 

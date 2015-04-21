@@ -39,7 +39,8 @@ extern void gfs2_rgrp_go_unlock(struct gfs2_holder *gh);
 
 extern struct gfs2_alloc *gfs2_alloc_get(struct gfs2_inode *ip);
 
-extern int gfs2_inplace_reserve(struct gfs2_inode *ip, u32 requested);
+#define GFS2_AF_ORLOV 1
+extern int gfs2_inplace_reserve(struct gfs2_inode *ip, const struct gfs2_alloc_parms *ap);
 extern void gfs2_inplace_release(struct gfs2_inode *ip);
 
 extern int gfs2_alloc_blocks(struct gfs2_inode *ip, u64 *bn, unsigned int *n,
@@ -47,7 +48,7 @@ extern int gfs2_alloc_blocks(struct gfs2_inode *ip, u64 *bn, unsigned int *n,
 
 extern int gfs2_rs_alloc(struct gfs2_inode *ip);
 extern void gfs2_rs_deltree(struct gfs2_blkreserv *rs);
-extern void gfs2_rs_delete(struct gfs2_inode *ip);
+extern void gfs2_rs_delete(struct gfs2_inode *ip, atomic_t *wcount);
 extern void __gfs2_free_blocks(struct gfs2_inode *ip, u64 bstart, u32 blen, int meta);
 extern void gfs2_free_meta(struct gfs2_inode *ip, u64 bstart, u32 blen);
 extern void gfs2_free_di(struct gfs2_rgrpd *rgd, struct gfs2_inode *ip);
@@ -67,36 +68,16 @@ extern void gfs2_rlist_add(struct gfs2_inode *ip, struct gfs2_rgrp_list *rlist,
 extern void gfs2_rlist_alloc(struct gfs2_rgrp_list *rlist, unsigned int state);
 extern void gfs2_rlist_free(struct gfs2_rgrp_list *rlist);
 extern u64 gfs2_ri_total(struct gfs2_sbd *sdp);
-extern int gfs2_rgrp_dump(struct seq_file *seq, const struct gfs2_glock *gl);
+extern void gfs2_rgrp_dump(struct seq_file *seq, const struct gfs2_glock *gl);
 extern int gfs2_rgrp_send_discards(struct gfs2_sbd *sdp, u64 offset,
 				   struct buffer_head *bh,
 				   const struct gfs2_bitmap *bi, unsigned minlen, u64 *ptrimmed);
 extern int gfs2_fitrim(struct file *filp, void __user *argp);
 
-/* This is how to tell if a multi-block reservation is "inplace" reserved: */
-static inline int gfs2_mb_reserved(struct gfs2_inode *ip)
+/* This is how to tell if a reservation is in the rgrp tree: */
+static inline bool gfs2_rs_active(struct gfs2_blkreserv *rs)
 {
-	if (ip->i_res && ip->i_res->rs_requested)
-		return 1;
-	return 0;
-}
-
-/* This is how to tell if a multi-block reservation is in the rgrp tree: */
-static inline int gfs2_rs_active(struct gfs2_blkreserv *rs)
-{
-	if (rs && rs->rs_bi)
-		return 1;
-	return 0;
-}
-
-static inline u32 gfs2_bi2rgd_blk(const struct gfs2_bitmap *bi, u32 blk)
-{
-	return (bi->bi_start * GFS2_NBBY) + blk;
-}
-
-static inline u64 gfs2_rs_startblk(const struct gfs2_blkreserv *rs)
-{
-	return gfs2_bi2rgd_blk(rs->rs_bi, rs->rs_biblk) + rs->rs_rgd->rd_data0;
+	return rs && !RB_EMPTY_NODE(&rs->rs_node);
 }
 
 #endif /* __RGRP_DOT_H__ */

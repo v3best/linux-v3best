@@ -190,7 +190,7 @@ static int do_uevent(struct dlm_ls *ls, int in)
 	else
 		kobject_uevent(&ls->ls_kobj, KOBJ_OFFLINE);
 
-	log_debug(ls, "%s the lockspace group...", in ? "joining" : "leaving");
+	log_rinfo(ls, "%s the lockspace group...", in ? "joining" : "leaving");
 
 	/* dlm_controld will see the uevent, do the necessary group management
 	   and then write to sysfs to wake us */
@@ -198,7 +198,7 @@ static int do_uevent(struct dlm_ls *ls, int in)
 	error = wait_event_interruptible(ls->ls_uevent_wait,
 			test_and_clear_bit(LSFL_UEVENT_WAIT, &ls->ls_flags));
 
-	log_debug(ls, "group event done %d %d", error, ls->ls_uevent_result);
+	log_rinfo(ls, "group event done %d %d", error, ls->ls_uevent_result);
 
 	if (error)
 		goto out;
@@ -582,8 +582,6 @@ static int new_lockspace(const char *name, const char *cluster,
 	INIT_LIST_HEAD(&ls->ls_root_list);
 	init_rwsem(&ls->ls_root_sem);
 
-	down_write(&ls->ls_in_recovery);
-
 	spin_lock(&lslist_lock);
 	ls->ls_create_count = 1;
 	list_add(&ls->ls_list, &lslist);
@@ -597,12 +595,23 @@ static int new_lockspace(const char *name, const char *cluster,
 		}
 	}
 
-	/* needs to find ls in lslist */
+	init_waitqueue_head(&ls->ls_recover_lock_wait);
+
+	/*
+	 * Once started, dlm_recoverd first looks for ls in lslist, then
+	 * initializes ls_in_recovery as locked in "down" mode.  We need
+	 * to wait for the wakeup from dlm_recoverd because in_recovery
+	 * has to start out in down mode.
+	 */
+
 	error = dlm_recoverd_start(ls);
 	if (error) {
 		log_error(ls, "can't start dlm_recoverd %d", error);
 		goto out_callback;
 	}
+
+	wait_event(ls->ls_recover_lock_wait,
+		   test_bit(LSFL_RECOVER_LOCK, &ls->ls_flags));
 
 	ls->ls_kobj.kset = dlm_kset;
 	error = kobject_init_and_add(&ls->ls_kobj, &dlm_ktype, NULL,
@@ -631,7 +640,7 @@ static int new_lockspace(const char *name, const char *cluster,
 
 	dlm_create_debug_file(ls);
 
-	log_debug(ls, "join complete");
+	log_rinfo(ls, "join complete");
 	*lockspace = ls;
 	return 0;
 
@@ -697,9 +706,7 @@ static int lkb_idr_is_local(int id, void *p, void *data)
 {
 	struct dlm_lkb *lkb = p;
 
-	if (!lkb->lkb_nodeid)
-		return 1;
-	return 0;
+	return lkb->lkb_nodeid == 0 && lkb->lkb_grmode != DLM_LOCK_IV;
 }
 
 static int lkb_idr_is_any(int id, void *p, void *data)
@@ -787,7 +794,6 @@ static int release_lockspace(struct dlm_ls *ls, int force)
 	 */
 
 	idr_for_each(&ls->ls_lkbidr, lkb_idr_free, ls);
-	idr_remove_all(&ls->ls_lkbidr);
 	idr_destroy(&ls->ls_lkbidr);
 
 	/*
@@ -829,7 +835,7 @@ static int release_lockspace(struct dlm_ls *ls, int force)
 	dlm_clear_members(ls);
 	dlm_clear_members_gone(ls);
 	kfree(ls->ls_node_array);
-	log_debug(ls, "release_lockspace final free");
+	log_rinfo(ls, "release_lockspace final free");
 	kobject_put(&ls->ls_kobj);
 	/* The ls structure will be freed when the kobject is done with */
 
@@ -875,17 +881,24 @@ int dlm_release_lockspace(void *lockspace, int force)
 void dlm_stop_lockspaces(void)
 {
 	struct dlm_ls *ls;
+	int count;
 
  restart:
+	count = 0;
 	spin_lock(&lslist_lock);
 	list_for_each_entry(ls, &lslist, ls_list) {
-		if (!test_bit(LSFL_RUNNING, &ls->ls_flags))
+		if (!test_bit(LSFL_RUNNING, &ls->ls_flags)) {
+			count++;
 			continue;
+		}
 		spin_unlock(&lslist_lock);
 		log_error(ls, "no userland control daemon, stopping lockspace");
 		dlm_ls_stop(ls);
 		goto restart;
 	}
 	spin_unlock(&lslist_lock);
+
+	if (count)
+		log_print("dlm user daemon left %d lockspaces", count);
 }
 

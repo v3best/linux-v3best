@@ -361,12 +361,12 @@ static int read_exec(struct page_collect *pcol)
 	return 0;
 
 err:
-	if (!pcol->read_4_write)
-		_unlock_pcol_pages(pcol, ret, READ);
-
-	pcol_free(pcol);
-
+	if (!pcol_copy) /* Failed before ownership transfer */
+		pcol_copy = pcol;
+	_unlock_pcol_pages(pcol_copy, ret, READ);
+	pcol_free(pcol_copy);
 	kfree(pcol_copy);
+
 	return ret;
 }
 
@@ -577,7 +577,7 @@ static struct page *__r4w_get_page(void *priv, u64 offset, bool *uptodate)
 
 		if (offset >= i_size) {
 			*uptodate = true;
-			EXOFS_DBGMSG("offset >= i_size index=0x%lx\n", index);
+			EXOFS_DBGMSG2("offset >= i_size index=0x%lx\n", index);
 			return ZERO_PAGE(0);
 		}
 
@@ -596,10 +596,10 @@ static struct page *__r4w_get_page(void *priv, u64 offset, bool *uptodate)
 			*uptodate = true;
 		else
 			*uptodate = PageUptodate(page);
-		EXOFS_DBGMSG("index=0x%lx uptodate=%d\n", index, *uptodate);
+		EXOFS_DBGMSG2("index=0x%lx uptodate=%d\n", index, *uptodate);
 		return page;
 	} else {
-		EXOFS_DBGMSG("YES that_locked_page index=0x%lx\n",
+		EXOFS_DBGMSG2("YES that_locked_page index=0x%lx\n",
 			     pcol->that_locked_page->index);
 		*uptodate = true;
 		return pcol->that_locked_page;
@@ -611,11 +611,11 @@ static void __r4w_put_page(void *priv, struct page *page)
 	struct page_collect *pcol = priv;
 
 	if ((pcol->that_locked_page != page) && (ZERO_PAGE(0) != page)) {
-		EXOFS_DBGMSG("index=0x%lx\n", page->index);
+		EXOFS_DBGMSG2("index=0x%lx\n", page->index);
 		page_cache_release(page);
 		return;
 	}
-	EXOFS_DBGMSG("that_locked_page index=0x%lx\n",
+	EXOFS_DBGMSG2("that_locked_page index=0x%lx\n",
 		     ZERO_PAGE(0) == page ? -1 : page->index);
 }
 
@@ -676,8 +676,10 @@ static int write_exec(struct page_collect *pcol)
 	return 0;
 
 err:
-	_unlock_pcol_pages(pcol, ret, WRITE);
-	pcol_free(pcol);
+	if (!pcol_copy) /* Failed before ownership transfer */
+		pcol_copy = pcol;
+	_unlock_pcol_pages(pcol_copy, ret, WRITE);
+	pcol_free(pcol_copy);
 	kfree(pcol_copy);
 
 	return ret;
@@ -859,7 +861,7 @@ static int exofs_writepage(struct page *page, struct writeback_control *wbc)
 static void _write_failed(struct inode *inode, loff_t to)
 {
 	if (to > inode->i_size)
-		truncate_pagecache(inode, to, inode->i_size);
+		truncate_pagecache(inode, inode->i_size);
 }
 
 int exofs_write_begin(struct file *file, struct address_space *mapping,
@@ -951,10 +953,20 @@ static int exofs_releasepage(struct page *page, gfp_t gfp)
 	return 0;
 }
 
-static void exofs_invalidatepage(struct page *page, unsigned long offset)
+static void exofs_invalidatepage(struct page *page, unsigned int offset,
+				 unsigned int length)
 {
-	EXOFS_DBGMSG("page 0x%lx offset 0x%lx\n", page->index, offset);
+	EXOFS_DBGMSG("page 0x%lx offset 0x%x length 0x%x\n",
+		     page->index, offset, length);
 	WARN_ON(1);
+}
+
+
+ /* TODO: Should be easy enough to do proprly */
+static ssize_t exofs_direct_IO(int rw, struct kiocb *iocb,
+		const struct iovec *iov, loff_t offset, unsigned long nr_segs)
+{
+	return 0;
 }
 
 const struct address_space_operations exofs_aops = {
@@ -970,7 +982,7 @@ const struct address_space_operations exofs_aops = {
 
 	/* Not implemented Yet */
 	.bmap		= NULL, /* TODO: use osd's OSD_ACT_READ_MAP */
-	.direct_IO	= NULL, /* TODO: Should be trivial to do */
+	.direct_IO	= exofs_direct_IO,
 
 	/* With these NULL has special meaning or default is not exported */
 	.get_xip_mem	= NULL,
@@ -1006,7 +1018,7 @@ static int _do_truncate(struct inode *inode, loff_t newsize)
 	if (likely(!ret))
 		truncate_setsize(inode, newsize);
 
-	EXOFS_DBGMSG("(0x%lx) size=0x%llx ret=>%d\n",
+	EXOFS_DBGMSG2("(0x%lx) size=0x%llx ret=>%d\n",
 		     inode->i_ino, newsize, ret);
 	return ret;
 }
@@ -1090,14 +1102,13 @@ static int exofs_get_inode(struct super_block *sb, struct exofs_i_info *oi,
 		/* If object is lost on target we might as well enable it's
 		 * delete.
 		 */
-		if ((ret == -ENOENT) || (ret == -EINVAL))
-			ret = 0;
+		ret = 0;
 		goto out;
 	}
 
 	ret = extract_attr_from_ios(ios, &attrs[0]);
 	if (ret) {
-		EXOFS_ERR("%s: extract_attr of inode_data failed\n", __func__);
+		EXOFS_ERR("%s: extract_attr 0 of inode failed\n", __func__);
 		goto out;
 	}
 	WARN_ON(attrs[0].len != EXOFS_INO_ATTR_SIZE);
@@ -1105,7 +1116,7 @@ static int exofs_get_inode(struct super_block *sb, struct exofs_i_info *oi,
 
 	ret = extract_attr_from_ios(ios, &attrs[1]);
 	if (ret) {
-		EXOFS_ERR("%s: extract_attr of inode_data failed\n", __func__);
+		EXOFS_ERR("%s: extract_attr 1 of inode failed\n", __func__);
 		goto out;
 	}
 	if (attrs[1].len) {
@@ -1120,7 +1131,7 @@ static int exofs_get_inode(struct super_block *sb, struct exofs_i_info *oi,
 
 	ret = extract_attr_from_ios(ios, &attrs[2]);
 	if (ret) {
-		EXOFS_ERR("%s: extract_attr of inode_data failed\n", __func__);
+		EXOFS_ERR("%s: extract_attr 2 of inode failed\n", __func__);
 		goto out;
 	}
 	if (attrs[2].len) {
@@ -1172,8 +1183,8 @@ struct inode *exofs_iget(struct super_block *sb, unsigned long ino)
 
 	/* copy stuff from on-disk struct to in-memory struct */
 	inode->i_mode = le16_to_cpu(fcb.i_mode);
-	inode->i_uid = le32_to_cpu(fcb.i_uid);
-	inode->i_gid = le32_to_cpu(fcb.i_gid);
+	i_uid_write(inode, le32_to_cpu(fcb.i_uid));
+	i_gid_write(inode, le32_to_cpu(fcb.i_gid));
 	set_nlink(inode, le16_to_cpu(fcb.i_links_count));
 	inode->i_ctime.tv_sec = (signed)le32_to_cpu(fcb.i_ctime);
 	inode->i_atime.tv_sec = (signed)le32_to_cpu(fcb.i_atime);
@@ -1385,8 +1396,8 @@ static int exofs_update_inode(struct inode *inode, int do_sync)
 	fcb = &args->fcb;
 
 	fcb->i_mode = cpu_to_le16(inode->i_mode);
-	fcb->i_uid = cpu_to_le32(inode->i_uid);
-	fcb->i_gid = cpu_to_le32(inode->i_gid);
+	fcb->i_uid = cpu_to_le32(i_uid_read(inode));
+	fcb->i_gid = cpu_to_le32(i_gid_read(inode));
 	fcb->i_links_count = cpu_to_le16(inode->i_nlink);
 	fcb->i_ctime = cpu_to_le32(inode->i_ctime.tv_sec);
 	fcb->i_atime = cpu_to_le32(inode->i_atime.tv_sec);
@@ -1475,7 +1486,7 @@ void exofs_evict_inode(struct inode *inode)
 	struct ore_io_state *ios;
 	int ret;
 
-	truncate_inode_pages(&inode->i_data, 0);
+	truncate_inode_pages_final(&inode->i_data);
 
 	/* TODO: should do better here */
 	if (inode->i_nlink || is_bad_inode(inode))

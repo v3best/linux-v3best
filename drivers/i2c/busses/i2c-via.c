@@ -22,7 +22,6 @@
 #include <linux/module.h>
 #include <linux/pci.h>
 #include <linux/ioport.h>
-#include <linux/init.h>
 #include <linux/i2c.h>
 #include <linux/i2c-algo-bit.h>
 #include <linux/io.h>
@@ -89,14 +88,14 @@ static struct i2c_adapter vt586b_adapter = {
 };
 
 
-static DEFINE_PCI_DEVICE_TABLE(vt586b_ids) = {
+static const struct pci_device_id vt586b_ids[] = {
 	{ PCI_DEVICE(PCI_VENDOR_ID_VIA, PCI_DEVICE_ID_VIA_82C586_3) },
 	{ 0, }
 };
 
 MODULE_DEVICE_TABLE (pci, vt586b_ids);
 
-static int __devinit vt586b_probe(struct pci_dev *dev, const struct pci_device_id *id)
+static int vt586b_probe(struct pci_dev *dev, const struct pci_device_id *id)
 {
 	u16 base;
 	u8 rev;
@@ -146,7 +145,7 @@ static int __devinit vt586b_probe(struct pci_dev *dev, const struct pci_device_i
 	return 0;
 }
 
-static void __devexit vt586b_remove(struct pci_dev *dev)
+static void vt586b_remove(struct pci_dev *dev)
 {
 	i2c_del_adapter(&vt586b_adapter);
 	release_region(I2C_DIR, IOSPACE);
@@ -158,7 +157,7 @@ static struct pci_driver vt586b_driver = {
 	.name		= "vt586b_smbus",
 	.id_table	= vt586b_ids,
 	.probe		= vt586b_probe,
-	.remove		= __devexit_p(vt586b_remove),
+	.remove		= vt586b_remove,
 };
 
 module_pci_driver(vt586b_driver);

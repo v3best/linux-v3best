@@ -1,5 +1,5 @@
 /*
- * RDC321x MFD southbrige driver
+ * RDC321x MFD southbridge driver
  *
  * Copyright (C) 2007-2010 Florian Fainelli <florian@openwrt.org>
  * Copyright (C) 2010 Bernhard Loos <bernhardloos@googlemail.com>
@@ -19,7 +19,6 @@
  * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
  *
  */
-#include <linux/init.h>
 #include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/platform_device.h>
@@ -56,7 +55,7 @@ static struct resource rdc321x_gpio_resources[] = {
 	}
 };
 
-static struct mfd_cell rdc321x_sb_cells[] = {
+static const struct mfd_cell rdc321x_sb_cells[] = {
 	{
 		.name		= "rdc321x-wdt",
 		.resources	= rdc321x_wdt_resource,
@@ -72,7 +71,7 @@ static struct mfd_cell rdc321x_sb_cells[] = {
 	},
 };
 
-static int __devinit rdc321x_sb_probe(struct pci_dev *pdev,
+static int rdc321x_sb_probe(struct pci_dev *pdev,
 					const struct pci_device_id *ent)
 {
 	int err;
@@ -91,12 +90,12 @@ static int __devinit rdc321x_sb_probe(struct pci_dev *pdev,
 			       NULL, 0, NULL);
 }
 
-static void __devexit rdc321x_sb_remove(struct pci_dev *pdev)
+static void rdc321x_sb_remove(struct pci_dev *pdev)
 {
 	mfd_remove_devices(&pdev->dev);
 }
 
-static DEFINE_PCI_DEVICE_TABLE(rdc321x_sb_table) = {
+static const struct pci_device_id rdc321x_sb_table[] = {
 	{ PCI_DEVICE(PCI_VENDOR_ID_RDC, PCI_DEVICE_ID_RDC_R6030) },
 	{}
 };
@@ -106,7 +105,7 @@ static struct pci_driver rdc321x_sb_driver = {
 	.name		= "RDC321x Southbridge",
 	.id_table	= rdc321x_sb_table,
 	.probe		= rdc321x_sb_probe,
-	.remove		= __devexit_p(rdc321x_sb_remove),
+	.remove		= rdc321x_sb_remove,
 };
 
 module_pci_driver(rdc321x_sb_driver);

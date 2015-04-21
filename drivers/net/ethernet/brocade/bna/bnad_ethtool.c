@@ -102,6 +102,7 @@ static const char *bnad_net_stats_strings[BNAD_ETHTOOL_STATS_NUM] = {
 	"rx_unmap_q_alloc_failed",
 	"rxbuf_alloc_failed",
 
+	"mac_stats_clr_cnt",
 	"mac_frame_64",
 	"mac_frame_65_127",
 	"mac_frame_128_255",
@@ -1130,6 +1131,7 @@ static const struct ethtool_ops bnad_ethtool_ops = {
 	.get_eeprom = bnad_get_eeprom,
 	.set_eeprom = bnad_set_eeprom,
 	.flash_device = bnad_flash_device,
+	.get_ts_info = ethtool_op_get_ts_info,
 };
 
 void

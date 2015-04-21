@@ -1,4 +1,4 @@
-/* Copyright (C) 2006-2012 B.A.T.M.A.N. contributors:
+/* Copyright (C) 2006-2014 B.A.T.M.A.N. contributors:
  *
  * Simon Wunderlich, Marek Lindner
  *
@@ -12,9 +12,7 @@
  * General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
- * 02110-1301, USA
+ * along with this program; if not, see <http://www.gnu.org/licenses/>.
  */
 
 #include "main.h"
@@ -79,20 +77,17 @@ int batadv_bit_get_packet(void *priv, unsigned long *seq_bits,
 	 * or the old packet got delayed somewhere in the network. The
 	 * packet should be dropped without calling this function if the
 	 * seqno window is protected.
+	 *
+	 * seq_num_diff <= -BATADV_TQ_LOCAL_WINDOW_SIZE
+	 * or
+	 * seq_num_diff >= BATADV_EXPECTED_SEQNO_RANGE
 	 */
-	if (seq_num_diff <= -BATADV_TQ_LOCAL_WINDOW_SIZE ||
-	    seq_num_diff >= BATADV_EXPECTED_SEQNO_RANGE) {
+	batadv_dbg(BATADV_DBG_BATMAN, bat_priv,
+		   "Other host probably restarted!\n");
 
-		batadv_dbg(BATADV_DBG_BATMAN, bat_priv,
-			   "Other host probably restarted!\n");
+	bitmap_zero(seq_bits, BATADV_TQ_LOCAL_WINDOW_SIZE);
+	if (set_mark)
+		batadv_set_bit(seq_bits, 0);
 
-		bitmap_zero(seq_bits, BATADV_TQ_LOCAL_WINDOW_SIZE);
-		if (set_mark)
-			batadv_set_bit(seq_bits, 0);
-
-		return 1;
-	}
-
-	/* never reached */
-	return 0;
+	return 1;
 }

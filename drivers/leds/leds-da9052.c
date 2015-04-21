@@ -14,7 +14,6 @@
 
 #include <linux/module.h>
 #include <linux/kernel.h>
-#include <linux/init.h>
 #include <linux/platform_device.h>
 #include <linux/leds.h>
 #include <linux/workqueue.h>
@@ -102,7 +101,7 @@ static int da9052_configure_leds(struct da9052 *da9052)
 	return error;
 }
 
-static int __devinit da9052_led_probe(struct platform_device *pdev)
+static int da9052_led_probe(struct platform_device *pdev)
 {
 	struct da9052_pdata *pdata;
 	struct da9052 *da9052;
@@ -112,7 +111,7 @@ static int __devinit da9052_led_probe(struct platform_device *pdev)
 	int i;
 
 	da9052 = dev_get_drvdata(pdev->dev.parent);
-	pdata = da9052->dev->platform_data;
+	pdata = dev_get_platdata(da9052->dev);
 	if (pdata == NULL) {
 		dev_err(&pdev->dev, "No platform data\n");
 		goto err;
@@ -176,7 +175,7 @@ err:
 	return error;
 }
 
-static int __devexit da9052_led_remove(struct platform_device *pdev)
+static int da9052_led_remove(struct platform_device *pdev)
 {
 	struct da9052_led *led = platform_get_drvdata(pdev);
 	struct da9052_pdata *pdata;
@@ -185,7 +184,7 @@ static int __devexit da9052_led_remove(struct platform_device *pdev)
 	int i;
 
 	da9052 = dev_get_drvdata(pdev->dev.parent);
-	pdata = da9052->dev->platform_data;
+	pdata = dev_get_platdata(da9052->dev);
 	pled = pdata->pled;
 
 	for (i = 0; i < pled->num_leds; i++) {
@@ -204,7 +203,7 @@ static struct platform_driver da9052_led_driver = {
 		.owner	= THIS_MODULE,
 	},
 	.probe		= da9052_led_probe,
-	.remove		= __devexit_p(da9052_led_remove),
+	.remove		= da9052_led_remove,
 };
 
 module_platform_driver(da9052_led_driver);

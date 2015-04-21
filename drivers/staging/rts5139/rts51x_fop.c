@@ -70,7 +70,7 @@ static int rts51x_sd_direct_cmnd(struct rts51x_chip *chip,
 	switch (dir) {
 	case 0:
 		/* No data */
-		retval = ext_sd_execute_no_data(chip, chip->card2lun[SD_CARD],
+		retval = ext_rts51x_sd_execute_no_data(chip, chip->card2lun[SD_CARD],
 						cmd_idx, standby, acmd,
 						rsp_code, arg);
 		if (retval != TRANSPORT_GOOD)
@@ -79,11 +79,11 @@ static int rts51x_sd_direct_cmnd(struct rts51x_chip *chip,
 
 	case 1:
 		/* Read from card */
-		buf = kmalloc(cmnd->buf_len, GFP_KERNEL);
+		buf = kzalloc(cmnd->buf_len, GFP_KERNEL);
 		if (!buf)
 			TRACE_RET(chip, STATUS_NOMEM);
 
-		retval = ext_sd_execute_read_data(chip, chip->card2lun[SD_CARD],
+		retval = ext_rts51x_sd_execute_read_data(chip, chip->card2lun[SD_CARD],
 						  cmd_idx, cmd12, standby, acmd,
 						  rsp_code, arg, len, buf,
 						  cmnd->buf_len, 0);
@@ -93,7 +93,7 @@ static int rts51x_sd_direct_cmnd(struct rts51x_chip *chip,
 		}
 
 		retval =
-		    copy_to_user((void *)cmnd->buf, (void *)buf, cmnd->buf_len);
+		    copy_to_user(cmnd->buf, (void *)buf, cmnd->buf_len);
 		if (retval) {
 			kfree(buf);
 			TRACE_RET(chip, STATUS_NOMEM);
@@ -109,7 +109,7 @@ static int rts51x_sd_direct_cmnd(struct rts51x_chip *chip,
 			TRACE_RET(chip, STATUS_NOMEM);
 
 		retval =
-		    copy_from_user((void *)buf, (void *)cmnd->buf,
+		    copy_from_user((void *)buf, cmnd->buf,
 				   cmnd->buf_len);
 		if (retval) {
 			kfree(buf);
@@ -117,7 +117,7 @@ static int rts51x_sd_direct_cmnd(struct rts51x_chip *chip,
 		}
 
 		retval =
-		    ext_sd_execute_write_data(chip, chip->card2lun[SD_CARD],
+		    ext_rts51x_sd_execute_write_data(chip, chip->card2lun[SD_CARD],
 					      cmd_idx, cmd12, standby, acmd,
 					      rsp_code, arg, len, buf,
 					      cmnd->buf_len, 0);
@@ -154,7 +154,7 @@ static int rts51x_sd_get_rsp(struct rts51x_chip *chip, struct sd_rsp *rsp)
 	else
 		count = (rsp->rsp_len < 6) ? rsp->rsp_len : 6;
 
-	retval = copy_to_user((void *)rsp->rsp, (void *)sd_card->rsp, count);
+	retval = copy_to_user(rsp->rsp, (void *)sd_card->rsp, count);
 	if (retval)
 		TRACE_RET(chip, STATUS_NOMEM);
 
@@ -250,7 +250,7 @@ long rts51x_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 	switch (cmd) {
 	case RTS5139_IOC_SD_DIRECT:
 		retval =
-		    copy_from_user((void *)&cmnd, (void *)arg,
+		    copy_from_user((void *)&cmnd, (void __user *)arg,
 				   sizeof(struct sd_direct_cmnd));
 		if (retval) {
 			retval = -ENOMEM;
@@ -265,7 +265,7 @@ long rts51x_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 
 	case RTS5139_IOC_SD_GET_RSP:
 		retval =
-		    copy_from_user((void *)&rsp, (void *)arg,
+		    copy_from_user(&rsp, (void __user *)arg,
 				   sizeof(struct sd_rsp));
 		if (retval) {
 			retval = -ENOMEM;

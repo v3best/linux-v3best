@@ -25,7 +25,7 @@
  * may be held at once.  This is just an implementation detail.
  *
  * ii) Recursive locking attempts are detected and return EINVAL.  A stack
- * trace is also emitted for the previous lock aquisition.
+ * trace is also emitted for the previous lock acquisition.
  *
  * iii) Priority is given to write locks.
  */
@@ -104,12 +104,12 @@ static int __check_holder(struct block_lock *lock)
 
 	for (i = 0; i < MAX_HOLDERS; i++) {
 		if (lock->holders[i] == current) {
-			DMERR("recursive lock detected in pool metadata");
+			DMERR("recursive lock detected in metadata");
 #ifdef CONFIG_DM_DEBUG_BLOCK_STACK_TRACING
 			DMERR("previously held here:");
 			print_stack_trace(lock->traces + i, 4);
 
-			DMERR("subsequent aquisition attempted here:");
+			DMERR("subsequent acquisition attempted here:");
 			t.nr_entries = 0;
 			t.max_entries = MAX_STACK;
 			t.entries = entries;
@@ -428,15 +428,17 @@ static int dm_bm_validate_buffer(struct dm_block_manager *bm,
 		if (!v)
 			return 0;
 		r = v->check(v, (struct dm_block *) buf, dm_bufio_get_block_size(bm->bufio));
-		if (unlikely(r))
+		if (unlikely(r)) {
+			DMERR_LIMIT("%s validator check failed for block %llu", v->name,
+				    (unsigned long long) dm_bufio_get_block_number(buf));
 			return r;
+		}
 		aux->validator = v;
 	} else {
 		if (unlikely(aux->validator != v)) {
-			DMERR("validator mismatch (old=%s vs new=%s) for block %llu",
-				aux->validator->name, v ? v->name : "NULL",
-				(unsigned long long)
-					dm_bufio_get_block_number(buf));
+			DMERR_LIMIT("validator mismatch (old=%s vs new=%s) for block %llu",
+				    aux->validator->name, v ? v->name : "NULL",
+				    (unsigned long long) dm_bufio_get_block_number(buf));
 			return -EINVAL;
 		}
 	}
@@ -593,23 +595,18 @@ int dm_bm_unlock(struct dm_block *b)
 }
 EXPORT_SYMBOL_GPL(dm_bm_unlock);
 
-int dm_bm_flush_and_unlock(struct dm_block_manager *bm,
-			   struct dm_block *superblock)
+int dm_bm_flush(struct dm_block_manager *bm)
 {
-	int r;
-
 	if (bm->read_only)
 		return -EPERM;
 
-	r = dm_bufio_write_dirty_buffers(bm->bufio);
-	if (unlikely(r)) {
-		dm_bm_unlock(superblock);
-		return r;
-	}
-
-	dm_bm_unlock(superblock);
-
 	return dm_bufio_write_dirty_buffers(bm->bufio);
+}
+EXPORT_SYMBOL_GPL(dm_bm_flush);
+
+void dm_bm_prefetch(struct dm_block_manager *bm, dm_block_t b)
+{
+	dm_bufio_prefetch(bm->bufio, b, 1);
 }
 
 void dm_bm_set_read_only(struct dm_block_manager *bm)
@@ -617,6 +614,12 @@ void dm_bm_set_read_only(struct dm_block_manager *bm)
 	bm->read_only = true;
 }
 EXPORT_SYMBOL_GPL(dm_bm_set_read_only);
+
+void dm_bm_set_read_write(struct dm_block_manager *bm)
+{
+	bm->read_only = false;
+}
+EXPORT_SYMBOL_GPL(dm_bm_set_read_write);
 
 u32 dm_bm_checksum(const void *data, size_t len, u32 init_xor)
 {

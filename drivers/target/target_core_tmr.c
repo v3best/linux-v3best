@@ -3,8 +3,7 @@
  *
  * This file contains SPC-3 task management infrastructure
  *
- * Copyright (c) 2009,2010 Rising Tide Systems
- * Copyright (c) 2009,2010 Linux-iSCSI.org
+ * (c) Copyright 2009-2013 Datera, Inc.
  *
  * Nicholas A. Bellinger <nab@kernel.org>
  *
@@ -86,21 +85,19 @@ void core_tmr_release_req(
 static void core_tmr_handle_tas_abort(
 	struct se_node_acl *tmr_nacl,
 	struct se_cmd *cmd,
-	int tas,
-	int fe_count)
+	int tas)
 {
-	if (!fe_count) {
-		transport_cmd_finish_abort(cmd, 1);
-		return;
-	}
+	bool remove = true;
 	/*
 	 * TASK ABORTED status (TAS) bit support
 	*/
 	if ((tmr_nacl &&
-	     (tmr_nacl == cmd->se_sess->se_node_acl)) || tas)
+	     (tmr_nacl != cmd->se_sess->se_node_acl)) && tas) {
+		remove = false;
 		transport_send_task_abort(cmd);
+	}
 
-	transport_cmd_finish_abort(cmd, 0);
+	transport_cmd_finish_abort(cmd, remove);
 }
 
 static int target_check_cdb_and_preempt(struct list_head *list,
@@ -133,6 +130,11 @@ void core_tmr_abort_task(
 
 		if (dev != se_cmd->se_dev)
 			continue;
+
+		/* skip se_cmd associated with tmr */
+		if (tmr->task_cmd == se_cmd)
+			continue;
+
 		ref_tag = se_cmd->se_tfo->get_task_tag(se_cmd);
 		if (tmr->ref_task_tag != ref_tag)
 			continue;
@@ -140,15 +142,15 @@ void core_tmr_abort_task(
 		printk("ABORT_TASK: Found referenced %s task_tag: %u\n",
 			se_cmd->se_tfo->get_fabric_name(), ref_tag);
 
-		spin_lock_irq(&se_cmd->t_state_lock);
+		spin_lock(&se_cmd->t_state_lock);
 		if (se_cmd->transport_state & CMD_T_COMPLETE) {
 			printk("ABORT_TASK: ref_tag: %u already complete, skipping\n", ref_tag);
-			spin_unlock_irq(&se_cmd->t_state_lock);
+			spin_unlock(&se_cmd->t_state_lock);
 			spin_unlock_irqrestore(&se_sess->sess_cmd_lock, flags);
 			goto out;
 		}
 		se_cmd->transport_state |= CMD_T_ABORTED;
-		spin_unlock_irq(&se_cmd->t_state_lock);
+		spin_unlock(&se_cmd->t_state_lock);
 
 		list_del_init(&se_cmd->se_cmd_list);
 		kref_get(&se_cmd->cmd_kref);
@@ -156,18 +158,9 @@ void core_tmr_abort_task(
 
 		cancel_work_sync(&se_cmd->work);
 		transport_wait_for_tasks(se_cmd);
-		/*
-		 * Now send SAM_STAT_TASK_ABORTED status for the referenced
-		 * se_cmd descriptor..
-		 */
-		transport_send_task_abort(se_cmd);
-		/*
-		 * Also deal with possible extra acknowledge reference..
-		 */
-		if (se_cmd->se_cmd_flags & SCF_ACK_KREF)
-			target_put_sess_cmd(se_sess, se_cmd);
 
 		target_put_sess_cmd(se_sess, se_cmd);
+		transport_cmd_finish_abort(se_cmd, true);
 
 		printk("ABORT_TASK: Sending TMR_FUNCTION_COMPLETE for"
 				" ref_tag: %d\n", ref_tag);
@@ -254,7 +247,6 @@ static void core_tmr_drain_state_list(
 	LIST_HEAD(drain_task_list);
 	struct se_cmd *cmd, *next;
 	unsigned long flags;
-	int fe_count;
 
 	/*
 	 * Complete outstanding commands with TASK_ABORTED SAM status.
@@ -330,24 +322,10 @@ static void core_tmr_drain_state_list(
 		spin_lock_irqsave(&cmd->t_state_lock, flags);
 		target_stop_cmd(cmd, &flags);
 
-		fe_count = atomic_read(&cmd->t_fe_count);
-
-		if (!(cmd->transport_state & CMD_T_ACTIVE)) {
-			pr_debug("LUN_RESET: got CMD_T_ACTIVE for"
-				" cdb: %p, t_fe_count: %d dev: %p\n", cmd,
-				fe_count, dev);
-			cmd->transport_state |= CMD_T_ABORTED;
-			spin_unlock_irqrestore(&cmd->t_state_lock, flags);
-
-			core_tmr_handle_tas_abort(tmr_nacl, cmd, tas, fe_count);
-			continue;
-		}
-		pr_debug("LUN_RESET: Got !CMD_T_ACTIVE for cdb: %p,"
-			" t_fe_count: %d dev: %p\n", cmd, fe_count, dev);
 		cmd->transport_state |= CMD_T_ABORTED;
 		spin_unlock_irqrestore(&cmd->t_state_lock, flags);
 
-		core_tmr_handle_tas_abort(tmr_nacl, cmd, tas, fe_count);
+		core_tmr_handle_tas_abort(tmr_nacl, cmd, tas);
 	}
 }
 
@@ -371,7 +349,7 @@ int core_tmr_lun_reset(
 	 * which the command was received shall be completed with TASK ABORTED
 	 * status (see SAM-4).
 	 */
-	tas = dev->se_sub_dev->se_dev_attrib.emulate_tas;
+	tas = dev->dev_attrib.emulate_tas;
 	/*
 	 * Determine if this se_tmr is coming from a $FABRIC_MOD
 	 * or struct se_device passthrough..
@@ -399,17 +377,15 @@ int core_tmr_lun_reset(
 	 * LOGICAL UNIT RESET
 	 */
 	if (!preempt_and_abort_list &&
-	     (dev->dev_flags & DF_SPC2_RESERVATIONS)) {
+	     (dev->dev_reservation_flags & DRF_SPC2_RESERVATIONS)) {
 		spin_lock(&dev->dev_reservation_lock);
 		dev->dev_reserved_node_acl = NULL;
-		dev->dev_flags &= ~DF_SPC2_RESERVATIONS;
+		dev->dev_reservation_flags &= ~DRF_SPC2_RESERVATIONS;
 		spin_unlock(&dev->dev_reservation_lock);
 		pr_debug("LUN_RESET: SCSI-2 Released reservation\n");
 	}
 
-	spin_lock_irq(&dev->stats_lock);
-	dev->num_resets++;
-	spin_unlock_irq(&dev->stats_lock);
+	atomic_long_inc(&dev->num_resets);
 
 	pr_debug("LUN_RESET: %s for [%s] Complete\n",
 			(preempt_and_abort_list) ? "Preempt" : "TMR",

@@ -13,7 +13,6 @@
 
 #include <linux/module.h>
 #include <linux/kernel.h>
-#include <linux/init.h>
 #include <linux/list.h>
 #include <linux/spinlock.h>
 #include <linux/device.h>
@@ -102,6 +101,12 @@ EXPORT_SYMBOL_GPL(led_trigger_show);
 void led_trigger_set(struct led_classdev *led_cdev, struct led_trigger *trig)
 {
 	unsigned long flags;
+	char *event = NULL;
+	char *envp[2];
+	const char *name;
+
+	name = trig ? trig->name : "none";
+	event = kasprintf(GFP_KERNEL, "TRIGGER=%s", name);
 
 	/* Remove any existing trigger */
 	if (led_cdev->trigger) {
@@ -109,6 +114,8 @@ void led_trigger_set(struct led_classdev *led_cdev, struct led_trigger *trig)
 		list_del(&led_cdev->trig_list);
 		write_unlock_irqrestore(&led_cdev->trigger->leddev_list_lock,
 			flags);
+		cancel_work_sync(&led_cdev->set_brightness_work);
+		led_stop_software_blink(led_cdev);
 		if (led_cdev->trigger->deactivate)
 			led_cdev->trigger->deactivate(led_cdev);
 		led_cdev->trigger = NULL;
@@ -121,6 +128,13 @@ void led_trigger_set(struct led_classdev *led_cdev, struct led_trigger *trig)
 		led_cdev->trigger = trig;
 		if (trig->activate)
 			trig->activate(led_cdev);
+	}
+
+	if (event) {
+		envp[0] = event;
+		envp[1] = NULL;
+		kobject_uevent_env(&led_cdev->dev->kobj, KOBJ_CHANGE, envp);
+		kfree(event);
 	}
 }
 EXPORT_SYMBOL_GPL(led_trigger_set);
@@ -150,6 +164,19 @@ void led_trigger_set_default(struct led_classdev *led_cdev)
 	up_read(&triggers_list_lock);
 }
 EXPORT_SYMBOL_GPL(led_trigger_set_default);
+
+void led_trigger_rename_static(const char *name, struct led_trigger *trig)
+{
+	/* new name must be on a temporary string to prevent races */
+	BUG_ON(name == trig->name);
+
+	down_write(&triggers_list_lock);
+	/* this assumes that trig->name was originaly allocated to
+	 * non constant storage */
+	strcpy((char *)trig->name, name);
+	up_write(&triggers_list_lock);
+}
+EXPORT_SYMBOL_GPL(led_trigger_rename_static);
 
 /* LED Trigger Interface */
 
@@ -192,9 +219,12 @@ void led_trigger_unregister(struct led_trigger *trig)
 {
 	struct led_classdev *led_cdev;
 
+	if (list_empty_careful(&trig->next_trig))
+		return;
+
 	/* Remove from the list of led triggers */
 	down_write(&triggers_list_lock);
-	list_del(&trig->next_trig);
+	list_del_init(&trig->next_trig);
 	up_write(&triggers_list_lock);
 
 	/* Remove anyone actively using this trigger */
@@ -214,18 +244,14 @@ EXPORT_SYMBOL_GPL(led_trigger_unregister);
 void led_trigger_event(struct led_trigger *trig,
 			enum led_brightness brightness)
 {
-	struct list_head *entry;
+	struct led_classdev *led_cdev;
 
 	if (!trig)
 		return;
 
 	read_lock(&trig->leddev_list_lock);
-	list_for_each(entry, &trig->led_cdevs) {
-		struct led_classdev *led_cdev;
-
-		led_cdev = list_entry(entry, struct led_classdev, trig_list);
-		__led_set_brightness(led_cdev, brightness);
-	}
+	list_for_each_entry(led_cdev, &trig->led_cdevs, trig_list)
+		led_set_brightness(led_cdev, brightness);
 	read_unlock(&trig->leddev_list_lock);
 }
 EXPORT_SYMBOL_GPL(led_trigger_event);
@@ -236,16 +262,13 @@ static void led_trigger_blink_setup(struct led_trigger *trig,
 			     int oneshot,
 			     int invert)
 {
-	struct list_head *entry;
+	struct led_classdev *led_cdev;
 
 	if (!trig)
 		return;
 
 	read_lock(&trig->leddev_list_lock);
-	list_for_each(entry, &trig->led_cdevs) {
-		struct led_classdev *led_cdev;
-
-		led_cdev = list_entry(entry, struct led_classdev, trig_list);
+	list_for_each_entry(led_cdev, &trig->led_cdevs, trig_list) {
 		if (oneshot)
 			led_blink_set_oneshot(led_cdev, delay_on, delay_off,
 					      invert);
@@ -285,13 +308,13 @@ void led_trigger_register_simple(const char *name, struct led_trigger **tp)
 		if (err < 0) {
 			kfree(trig);
 			trig = NULL;
-			printk(KERN_WARNING "LED trigger %s failed to register"
-				" (%d)\n", name, err);
+			pr_warn("LED trigger %s failed to register (%d)\n",
+				name, err);
 		}
-	} else
-		printk(KERN_WARNING "LED trigger %s failed to register"
-			" (no memory)\n", name);
-
+	} else {
+		pr_warn("LED trigger %s failed to register (no memory)\n",
+			name);
+	}
 	*tp = trig;
 }
 EXPORT_SYMBOL_GPL(led_trigger_register_simple);

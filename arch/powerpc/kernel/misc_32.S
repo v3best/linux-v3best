@@ -36,26 +36,44 @@
 
 	.text
 
+/*
+ * We store the saved ksp_limit in the unused part
+ * of the STACK_FRAME_OVERHEAD
+ */
 _GLOBAL(call_do_softirq)
 	mflr	r0
 	stw	r0,4(r1)
+	lwz	r10,THREAD+KSP_LIMIT(r2)
+	addi	r11,r3,THREAD_INFO_GAP
 	stwu	r1,THREAD_SIZE-STACK_FRAME_OVERHEAD(r3)
 	mr	r1,r3
+	stw	r10,8(r1)
+	stw	r11,THREAD+KSP_LIMIT(r2)
 	bl	__do_softirq
+	lwz	r10,8(r1)
 	lwz	r1,0(r1)
 	lwz	r0,4(r1)
+	stw	r10,THREAD+KSP_LIMIT(r2)
 	mtlr	r0
 	blr
 
-_GLOBAL(call_handle_irq)
+/*
+ * void call_do_irq(struct pt_regs *regs, struct thread_info *irqtp);
+ */
+_GLOBAL(call_do_irq)
 	mflr	r0
 	stw	r0,4(r1)
-	mtctr	r6
-	stwu	r1,THREAD_SIZE-STACK_FRAME_OVERHEAD(r5)
-	mr	r1,r5
-	bctrl
+	lwz	r10,THREAD+KSP_LIMIT(r2)
+	addi	r11,r4,THREAD_INFO_GAP
+	stwu	r1,THREAD_SIZE-STACK_FRAME_OVERHEAD(r4)
+	mr	r1,r4
+	stw	r10,8(r1)
+	stw	r11,THREAD+KSP_LIMIT(r2)
+	bl	__do_irq
+	lwz	r10,8(r1)
 	lwz	r1,0(r1)
 	lwz	r0,4(r1)
+	stw	r10,THREAD+KSP_LIMIT(r2)
 	mtlr	r0
 	blr
 
@@ -327,8 +345,9 @@ END_FTR_SECTION_IFSET(CPU_FTR_UNIFIED_ID_CACHE)
  *
  * flush_icache_range(unsigned long start, unsigned long stop)
  */
-_KPROBE(__flush_icache_range)
+_KPROBE(flush_icache_range)
 BEGIN_FTR_SECTION
+	PURGE_PREFETCHED_INS
 	blr				/* for 601, do nothing */
 END_FTR_SECTION_IFSET(CPU_FTR_COHERENT_ICACHE)
 	li	r5,L1_CACHE_BYTES-1
@@ -432,6 +451,7 @@ _GLOBAL(invalidate_dcache_range)
  */
 _GLOBAL(__flush_dcache_icache)
 BEGIN_FTR_SECTION
+	PURGE_PREFETCHED_INS
 	blr
 END_FTR_SECTION_IFSET(CPU_FTR_COHERENT_ICACHE)
 	rlwinm	r3,r3,0,0,31-PAGE_SHIFT		/* Get page base address */
@@ -473,6 +493,7 @@ END_MMU_FTR_SECTION_IFSET(MMU_FTR_TYPE_44x)
  */
 _GLOBAL(__flush_dcache_icache_phys)
 BEGIN_FTR_SECTION
+	PURGE_PREFETCHED_INS
 	blr					/* for 601, do nothing */
 END_FTR_SECTION_IFSET(CPU_FTR_COHERENT_ICACHE)
 	mfmsr	r10
@@ -643,6 +664,20 @@ _GLOBAL(__lshrdi3)
 	blr
 
 /*
+ * 64-bit comparison: __cmpdi2(s64 a, s64 b)
+ * Returns 0 if a < b, 1 if a == b, 2 if a > b.
+ */
+_GLOBAL(__cmpdi2)
+	cmpw	r3,r5
+	li	r3,1
+	bne	1f
+	cmplw	r4,r6
+	beqlr
+1:	li	r3,0
+	bltlr
+	li	r3,2
+	blr
+/*
  * 64-bit comparison: __ucmpdi2(u64 a, u64 b)
  * Returns 0 if a < b, 1 if a == b, 2 if a > b.
  */
@@ -657,43 +692,21 @@ _GLOBAL(__ucmpdi2)
 	li	r3,2
 	blr
 
+_GLOBAL(__bswapdi2)
+	rotlwi  r9,r4,8
+	rotlwi  r10,r3,8
+	rlwimi  r9,r4,24,0,7
+	rlwimi  r10,r3,24,0,7
+	rlwimi  r9,r4,24,16,23
+	rlwimi  r10,r3,24,16,23
+	mr      r3,r9
+	mr      r4,r10
+	blr
+
 _GLOBAL(abs)
 	srawi	r4,r3,31
 	xor	r3,r3,r4
 	sub	r3,r3,r4
-	blr
-
-/*
- * Create a kernel thread
- *   kernel_thread(fn, arg, flags)
- */
-_GLOBAL(kernel_thread)
-	stwu	r1,-16(r1)
-	stw	r30,8(r1)
-	stw	r31,12(r1)
-	mr	r30,r3		/* function */
-	mr	r31,r4		/* argument */
-	ori	r3,r5,CLONE_VM	/* flags */
-	oris	r3,r3,CLONE_UNTRACED>>16
-	li	r4,0		/* new sp (unused) */
-	li	r0,__NR_clone
-	sc
-	bns+	1f		/* did system call indicate error? */
-	neg	r3,r3		/* if so, make return code negative */
-1:	cmpwi	0,r3,0		/* parent or child? */
-	bne	2f		/* return if parent */
-	li	r0,0		/* make top-level stack frame */
-	stwu	r0,-16(r1)
-	mtlr	r30		/* fn addr in lr */
-	mr	r3,r31		/* load arg and call fn */
-	PPC440EP_ERR42
-	blrl
-	li	r0,__NR_exit	/* exit if function returns */
-	li	r3,0
-	sc
-2:	lwz	r30,8(r1)
-	lwz	r31,12(r1)
-	addi	r1,r1,16
 	blr
 
 #ifdef CONFIG_SMP

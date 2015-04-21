@@ -265,6 +265,7 @@ static dma_addr_t dma_map_xdr(struct svcxprt_rdma *xprt,
 		xdr_off -= xdr->head[0].iov_len;
 		if (xdr_off < xdr->page_len) {
 			/* This offset is in the page list */
+			xdr_off += xdr->page_base;
 			page = xdr->pages[xdr_off >> PAGE_SHIFT];
 			xdr_off &= ~PAGE_MASK;
 		} else {
@@ -548,6 +549,7 @@ static int send_reply(struct svcxprt_rdma *rdma,
 	int sge_no;
 	int sge_bytes;
 	int page_no;
+	int pages;
 	int ret;
 
 	/* Post a recv buffer to handle another request. */
@@ -611,7 +613,8 @@ static int send_reply(struct svcxprt_rdma *rdma,
 	 * respages array. They are our pages until the I/O
 	 * completes.
 	 */
-	for (page_no = 0; page_no < rqstp->rq_resused; page_no++) {
+	pages = rqstp->rq_next_page - rqstp->rq_respages;
+	for (page_no = 0; page_no < pages; page_no++) {
 		ctxt->pages[page_no+1] = rqstp->rq_respages[page_no];
 		ctxt->count++;
 		rqstp->rq_respages[page_no] = NULL;
@@ -623,6 +626,7 @@ static int send_reply(struct svcxprt_rdma *rdma,
 		if (page_no+1 >= sge_no)
 			ctxt->sge[page_no+1].length = 0;
 	}
+	rqstp->rq_next_page = rqstp->rq_respages + 1;
 	BUG_ON(sge_no > rdma->sc_max_sge);
 	memset(&send_wr, 0, sizeof send_wr);
 	ctxt->wr_op = IB_WR_SEND;

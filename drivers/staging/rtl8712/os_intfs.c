@@ -29,7 +29,6 @@
 #define _OS_INTFS_C_
 
 #include <linux/module.h>
-#include <linux/init.h>
 #include <linux/kthread.h>
 #include <linux/firmware.h>
 #include "osdep_service.h"
@@ -96,7 +95,7 @@ static char *initmac;
 /* if wifi_test = 1, driver will disable the turbo mode and pass it to
  * firmware private.
  */
-static int wifi_test = 0;
+static int wifi_test;
 
 module_param_string(ifname, ifname, sizeof(ifname), S_IRUGO|S_IWUSR);
 module_param(wifi_test, int, 0644);
@@ -141,7 +140,7 @@ static uint loadparam(struct _adapter *padapter, struct  net_device *pnetdev)
 	registry_par->ssid.SsidLength = 3;
 	registry_par->channel = (u8)channel;
 	registry_par->wireless_mode = (u8)wireless_mode;
-	registry_par->vrtl_carrier_sense = (u8)vrtl_carrier_sense ;
+	registry_par->vrtl_carrier_sense = (u8)vrtl_carrier_sense;
 	registry_par->vcs_type = (u8)vcs_type;
 	registry_par->frag_thresh = (u16)frag_thresh;
 	registry_par->preamble = (u8)preamble;
@@ -224,8 +223,7 @@ struct net_device *r8712_init_netdev(void)
 	}
 	padapter = (struct _adapter *) netdev_priv(pnetdev);
 	padapter->pnetdev = pnetdev;
-	printk(KERN_INFO "r8712u: register rtl8712_netdev_ops to"
-	       " netdev_ops\n");
+	pr_info("r8712u: register rtl8712_netdev_ops to netdev_ops\n");
 	pnetdev->netdev_ops = &rtl8712_netdev_ops;
 	pnetdev->watchdog_timeo = HZ; /* 1 second timeout */
 	pnetdev->wireless_handlers = (struct iw_handler_def *)
@@ -239,9 +237,9 @@ struct net_device *r8712_init_netdev(void)
 
 static u32 start_drv_threads(struct _adapter *padapter)
 {
-	padapter->cmdThread = kthread_run(r8712_cmd_thread, padapter,
+	padapter->cmdThread = kthread_run(r8712_cmd_thread, padapter, "%s",
 			      padapter->pnetdev->name);
-	if (IS_ERR(padapter->cmdThread) < 0)
+	if (IS_ERR(padapter->cmdThread))
 		return _FAIL;
 	return _SUCCESS;
 }

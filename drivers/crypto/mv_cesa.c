@@ -19,6 +19,9 @@
 #include <linux/clk.h>
 #include <crypto/internal/hash.h>
 #include <crypto/sha.h>
+#include <linux/of.h>
+#include <linux/of_platform.h>
+#include <linux/of_irq.h>
 
 #include "mv_cesa.h"
 
@@ -904,7 +907,7 @@ static int mv_cra_hash_hmac_sha1_init(struct crypto_tfm *tfm)
 	return mv_cra_hash_init(tfm, "sha1", COP_HMAC_SHA1, SHA1_BLOCK_SIZE);
 }
 
-irqreturn_t crypto_int(int irq, void *priv)
+static irqreturn_t crypto_int(int irq, void *priv)
 {
 	u32 val;
 
@@ -925,7 +928,7 @@ irqreturn_t crypto_int(int irq, void *priv)
 	return IRQ_HANDLED;
 }
 
-struct crypto_alg mv_aes_alg_ecb = {
+static struct crypto_alg mv_aes_alg_ecb = {
 	.cra_name		= "ecb(aes)",
 	.cra_driver_name	= "mv-ecb-aes",
 	.cra_priority	= 300,
@@ -948,7 +951,7 @@ struct crypto_alg mv_aes_alg_ecb = {
 	},
 };
 
-struct crypto_alg mv_aes_alg_cbc = {
+static struct crypto_alg mv_aes_alg_cbc = {
 	.cra_name		= "cbc(aes)",
 	.cra_driver_name	= "mv-cbc-aes",
 	.cra_priority	= 300,
@@ -972,7 +975,7 @@ struct crypto_alg mv_aes_alg_cbc = {
 	},
 };
 
-struct ahash_alg mv_sha1_alg = {
+static struct ahash_alg mv_sha1_alg = {
 	.init = mv_hash_init,
 	.update = mv_hash_update,
 	.final = mv_hash_final,
@@ -996,7 +999,7 @@ struct ahash_alg mv_sha1_alg = {
 		 }
 };
 
-struct ahash_alg mv_hmac_sha1_alg = {
+static struct ahash_alg mv_hmac_sha1_alg = {
 	.init = mv_hash_init,
 	.update = mv_hash_update,
 	.final = mv_hash_final,
@@ -1062,7 +1065,10 @@ static int mv_probe(struct platform_device *pdev)
 		goto err_unmap_reg;
 	}
 
-	irq = platform_get_irq(pdev, 0);
+	if (pdev->dev.of_node)
+		irq = irq_of_parse_and_map(pdev->dev.of_node, 0);
+	else
+		irq = platform_get_irq(pdev, 0);
 	if (irq < 0 || irq == NO_IRQ) {
 		ret = irq;
 		goto err_unmap_sram;
@@ -1078,7 +1084,7 @@ static int mv_probe(struct platform_device *pdev)
 		goto err_unmap_sram;
 	}
 
-	ret = request_irq(irq, crypto_int, IRQF_DISABLED, dev_name(&pdev->dev),
+	ret = request_irq(irq, crypto_int, 0, dev_name(&pdev->dev),
 			cp);
 	if (ret)
 		goto err_thread;
@@ -1140,7 +1146,6 @@ err_unmap_reg:
 err:
 	kfree(cp);
 	cpg = NULL;
-	platform_set_drvdata(pdev, NULL);
 	return ret;
 }
 
@@ -1170,12 +1175,19 @@ static int mv_remove(struct platform_device *pdev)
 	return 0;
 }
 
+static const struct of_device_id mv_cesa_of_match_table[] = {
+	{ .compatible = "marvell,orion-crypto", },
+	{}
+};
+MODULE_DEVICE_TABLE(of, mv_cesa_of_match_table);
+
 static struct platform_driver marvell_crypto = {
 	.probe		= mv_probe,
 	.remove		= mv_remove,
 	.driver		= {
 		.owner	= THIS_MODULE,
 		.name	= "mv_crypto",
+		.of_match_table = mv_cesa_of_match_table,
 	},
 };
 MODULE_ALIAS("platform:mv_crypto");

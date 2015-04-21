@@ -233,7 +233,7 @@ void __init paging_init(void)
 			printk("Fix your bootloader or use a memfile to make use of this area!\n");
 			m68k_num_memory--;
 			memmove(m68k_memory + i, m68k_memory + i + 1,
-				(m68k_num_memory - i) * sizeof(struct mem_info));
+				(m68k_num_memory - i) * sizeof(struct m68k_mem_info));
 			continue;
 		}
 		addr = m68k_memory[i].addr + m68k_memory[i].size;
@@ -303,18 +303,4 @@ void __init paging_init(void)
 			node_set_state(i, N_NORMAL_MEMORY);
 	}
 }
-
-void free_initmem(void)
-{
-	unsigned long addr;
-
-	addr = (unsigned long)__init_begin;
-	for (; addr < (unsigned long)__init_end; addr += PAGE_SIZE) {
-		virt_to_page(addr)->flags &= ~(1 << PG_reserved);
-		init_page_count(virt_to_page(addr));
-		free_page(addr);
-		totalram_pages++;
-	}
-}
-
 

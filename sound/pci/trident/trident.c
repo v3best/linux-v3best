@@ -73,8 +73,8 @@ static DEFINE_PCI_DEVICE_TABLE(snd_trident_ids) = {
 
 MODULE_DEVICE_TABLE(pci, snd_trident_ids);
 
-static int __devinit snd_trident_probe(struct pci_dev *pci,
-				       const struct pci_device_id *pci_id)
+static int snd_trident_probe(struct pci_dev *pci,
+			     const struct pci_device_id *pci_id)
 {
 	static int dev;
 	struct snd_card *card;
@@ -89,7 +89,8 @@ static int __devinit snd_trident_probe(struct pci_dev *pci,
 		return -ENOENT;
 	}
 
-	err = snd_card_create(index[dev], id[dev], THIS_MODULE, 0, &card);
+	err = snd_card_new(&pci->dev, index[dev], id[dev], THIS_MODULE,
+			   0, &card);
 	if (err < 0)
 		return err;
 
@@ -166,18 +167,17 @@ static int __devinit snd_trident_probe(struct pci_dev *pci,
 	return 0;
 }
 
-static void __devexit snd_trident_remove(struct pci_dev *pci)
+static void snd_trident_remove(struct pci_dev *pci)
 {
 	snd_card_free(pci_get_drvdata(pci));
-	pci_set_drvdata(pci, NULL);
 }
 
 static struct pci_driver trident_driver = {
 	.name = KBUILD_MODNAME,
 	.id_table = snd_trident_ids,
 	.probe = snd_trident_probe,
-	.remove = __devexit_p(snd_trident_remove),
-#ifdef CONFIG_PM
+	.remove = snd_trident_remove,
+#ifdef CONFIG_PM_SLEEP
 	.driver = {
 		.pm = &snd_trident_pm,
 	},

@@ -44,6 +44,8 @@ static int tobermory_set_bias_level(struct snd_soc_card *card,
 						     SND_SOC_CLOCK_IN);
 			if (ret < 0) {
 				pr_err("Failed to set SYSCLK: %d\n", ret);
+				snd_soc_dai_set_pll(codec_dai, WM8962_FLL,
+						    0, 0, 0);
 				return ret;
 			}
 		}
@@ -110,7 +112,7 @@ static struct snd_soc_dai_link tobermory_dai[] = {
 		.stream_name = "CPU",
 		.cpu_dai_name = "samsung-i2s.0",
 		.codec_dai_name = "wm8962",
-		.platform_name = "samsung-audio",
+		.platform_name = "samsung-i2s.0",
 		.codec_name = "wm8962.1-001a",
 		.dai_fmt = SND_SOC_DAIFMT_I2S | SND_SOC_DAIFMT_NB_NF
 				| SND_SOC_DAIFMT_CBM_CFM,
@@ -214,7 +216,7 @@ static struct snd_soc_card tobermory = {
 	.late_probe = tobermory_late_probe,
 };
 
-static __devinit int tobermory_probe(struct platform_device *pdev)
+static int tobermory_probe(struct platform_device *pdev)
 {
 	struct snd_soc_card *card = &tobermory;
 	int ret;
@@ -231,7 +233,7 @@ static __devinit int tobermory_probe(struct platform_device *pdev)
 	return 0;
 }
 
-static int __devexit tobermory_remove(struct platform_device *pdev)
+static int tobermory_remove(struct platform_device *pdev)
 {
 	struct snd_soc_card *card = platform_get_drvdata(pdev);
 
@@ -247,7 +249,7 @@ static struct platform_driver tobermory_driver = {
 		.pm = &snd_soc_pm_ops,
 	},
 	.probe = tobermory_probe,
-	.remove = __devexit_p(tobermory_remove),
+	.remove = tobermory_remove,
 };
 
 module_platform_driver(tobermory_driver);

@@ -20,12 +20,13 @@
 #include <linux/fb.h>
 #include <video/atmel_lcdc.h>
 
-#include <mach/board.h>
 #include <mach/at91sam9263.h>
 #include <mach/at91sam9263_matrix.h>
 #include <mach/at91_matrix.h>
 #include <mach/at91sam9_smc.h>
+#include <mach/hardware.h>
 
+#include "board.h"
 #include "generic.h"
 
 
@@ -78,7 +79,7 @@ void __init at91_add_device_usbh(struct at91_usbh_data *data)
 
 	/* Enable overcurrent notification */
 	for (i = 0; i < data->ports; i++) {
-		if (data->overcurrent_pin[i])
+		if (gpio_is_valid(data->overcurrent_pin[i]))
 			at91_set_gpio_input(data->overcurrent_pin[i], 1);
 	}
 
@@ -218,9 +219,9 @@ void __init at91_add_device_eth(struct macb_platform_data *data) {}
  *  MMC / SD
  * -------------------------------------------------------------------- */
 
-#if defined(CONFIG_MMC_AT91) || defined(CONFIG_MMC_AT91_MODULE)
+#if IS_ENABLED(CONFIG_MMC_ATMELMCI)
 static u64 mmc_dmamask = DMA_BIT_MASK(32);
-static struct at91_mmc_data mmc0_data, mmc1_data;
+static struct mci_platform_data mmc0_data, mmc1_data;
 
 static struct resource mmc0_resources[] = {
 	[0] = {
@@ -236,7 +237,7 @@ static struct resource mmc0_resources[] = {
 };
 
 static struct platform_device at91sam9263_mmc0_device = {
-	.name		= "at91_mci",
+	.name		= "atmel_mci",
 	.id		= 0,
 	.dev		= {
 				.dma_mask		= &mmc_dmamask,
@@ -261,7 +262,7 @@ static struct resource mmc1_resources[] = {
 };
 
 static struct platform_device at91sam9263_mmc1_device = {
-	.name		= "at91_mci",
+	.name		= "atmel_mci",
 	.id		= 1,
 	.dev		= {
 				.dma_mask		= &mmc_dmamask,
@@ -272,85 +273,110 @@ static struct platform_device at91sam9263_mmc1_device = {
 	.num_resources	= ARRAY_SIZE(mmc1_resources),
 };
 
-void __init at91_add_device_mmc(short mmc_id, struct at91_mmc_data *data)
+void __init at91_add_device_mci(short mmc_id, struct mci_platform_data *data)
 {
+	unsigned int i;
+	unsigned int slot_count = 0;
+
 	if (!data)
 		return;
 
-	/* input/irq */
-	if (gpio_is_valid(data->det_pin)) {
-		at91_set_gpio_input(data->det_pin, 1);
-		at91_set_deglitch(data->det_pin, 1);
-	}
-	if (gpio_is_valid(data->wp_pin))
-		at91_set_gpio_input(data->wp_pin, 1);
-	if (gpio_is_valid(data->vcc_pin))
-		at91_set_gpio_output(data->vcc_pin, 0);
+	for (i = 0; i < ATMCI_MAX_NR_SLOTS; i++) {
 
-	if (mmc_id == 0) {		/* MCI0 */
-		/* CLK */
-		at91_set_A_periph(AT91_PIN_PA12, 0);
+		if (!data->slot[i].bus_width)
+			continue;
 
-		if (data->slot_b) {
-			/* CMD */
-			at91_set_A_periph(AT91_PIN_PA16, 1);
+		/* input/irq */
+		if (gpio_is_valid(data->slot[i].detect_pin)) {
+			at91_set_gpio_input(data->slot[i].detect_pin,
+					1);
+			at91_set_deglitch(data->slot[i].detect_pin,
+					1);
+		}
+		if (gpio_is_valid(data->slot[i].wp_pin))
+			at91_set_gpio_input(data->slot[i].wp_pin, 1);
 
-			/* DAT0, maybe DAT1..DAT3 */
-			at91_set_A_periph(AT91_PIN_PA17, 1);
-			if (data->wire4) {
-				at91_set_A_periph(AT91_PIN_PA18, 1);
-				at91_set_A_periph(AT91_PIN_PA19, 1);
-				at91_set_A_periph(AT91_PIN_PA20, 1);
+		if (mmc_id == 0) {				/* MCI0 */
+			switch (i) {
+			case 0:					/* slot A */
+				/* CMD */
+				at91_set_A_periph(AT91_PIN_PA1, 1);
+				/* DAT0, maybe DAT1..DAT3 */
+				at91_set_A_periph(AT91_PIN_PA0, 1);
+				if (data->slot[i].bus_width == 4) {
+					at91_set_A_periph(AT91_PIN_PA3, 1);
+					at91_set_A_periph(AT91_PIN_PA4, 1);
+					at91_set_A_periph(AT91_PIN_PA5, 1);
+				}
+				slot_count++;
+				break;
+			case 1:					/* slot B */
+				/* CMD */
+				at91_set_A_periph(AT91_PIN_PA16, 1);
+				/* DAT0, maybe DAT1..DAT3 */
+				at91_set_A_periph(AT91_PIN_PA17, 1);
+				if (data->slot[i].bus_width == 4) {
+					at91_set_A_periph(AT91_PIN_PA18, 1);
+					at91_set_A_periph(AT91_PIN_PA19, 1);
+					at91_set_A_periph(AT91_PIN_PA20, 1);
+				}
+				slot_count++;
+				break;
+			default:
+				printk(KERN_ERR
+				       "AT91: SD/MMC slot %d not available\n", i);
+				break;
 			}
-		} else {
-			/* CMD */
-			at91_set_A_periph(AT91_PIN_PA1, 1);
+			if (slot_count) {
+				/* CLK */
+				at91_set_A_periph(AT91_PIN_PA12, 0);
 
-			/* DAT0, maybe DAT1..DAT3 */
-			at91_set_A_periph(AT91_PIN_PA0, 1);
-			if (data->wire4) {
-				at91_set_A_periph(AT91_PIN_PA3, 1);
-				at91_set_A_periph(AT91_PIN_PA4, 1);
-				at91_set_A_periph(AT91_PIN_PA5, 1);
+				mmc0_data = *data;
+				platform_device_register(&at91sam9263_mmc0_device);
+			}
+		} else if (mmc_id == 1) {			/* MCI1 */
+			switch (i) {
+			case 0:					/* slot A */
+				/* CMD */
+				at91_set_A_periph(AT91_PIN_PA7, 1);
+				/* DAT0, maybe DAT1..DAT3 */
+				at91_set_A_periph(AT91_PIN_PA8, 1);
+				if (data->slot[i].bus_width == 4) {
+					at91_set_A_periph(AT91_PIN_PA9, 1);
+					at91_set_A_periph(AT91_PIN_PA10, 1);
+					at91_set_A_periph(AT91_PIN_PA11, 1);
+				}
+				slot_count++;
+				break;
+			case 1:					/* slot B */
+				/* CMD */
+				at91_set_A_periph(AT91_PIN_PA21, 1);
+				/* DAT0, maybe DAT1..DAT3 */
+				at91_set_A_periph(AT91_PIN_PA22, 1);
+				if (data->slot[i].bus_width == 4) {
+					at91_set_A_periph(AT91_PIN_PA23, 1);
+					at91_set_A_periph(AT91_PIN_PA24, 1);
+					at91_set_A_periph(AT91_PIN_PA25, 1);
+				}
+				slot_count++;
+				break;
+			default:
+				printk(KERN_ERR
+				       "AT91: SD/MMC slot %d not available\n", i);
+				break;
+			}
+			if (slot_count) {
+				/* CLK */
+				at91_set_A_periph(AT91_PIN_PA6, 0);
+
+				mmc1_data = *data;
+				platform_device_register(&at91sam9263_mmc1_device);
 			}
 		}
-
-		mmc0_data = *data;
-		platform_device_register(&at91sam9263_mmc0_device);
-	} else {			/* MCI1 */
-		/* CLK */
-		at91_set_A_periph(AT91_PIN_PA6, 0);
-
-		if (data->slot_b) {
-			/* CMD */
-			at91_set_A_periph(AT91_PIN_PA21, 1);
-
-			/* DAT0, maybe DAT1..DAT3 */
-			at91_set_A_periph(AT91_PIN_PA22, 1);
-			if (data->wire4) {
-				at91_set_A_periph(AT91_PIN_PA23, 1);
-				at91_set_A_periph(AT91_PIN_PA24, 1);
-				at91_set_A_periph(AT91_PIN_PA25, 1);
-			}
-		} else {
-			/* CMD */
-			at91_set_A_periph(AT91_PIN_PA7, 1);
-
-			/* DAT0, maybe DAT1..DAT3 */
-			at91_set_A_periph(AT91_PIN_PA8, 1);
-			if (data->wire4) {
-				at91_set_A_periph(AT91_PIN_PA9, 1);
-				at91_set_A_periph(AT91_PIN_PA10, 1);
-				at91_set_A_periph(AT91_PIN_PA11, 1);
-			}
-		}
-
-		mmc1_data = *data;
-		platform_device_register(&at91sam9263_mmc1_device);
 	}
 }
 #else
-void __init at91_add_device_mmc(short mmc_id, struct at91_mmc_data *data) {}
+void __init at91_add_device_mci(short mmc_id, struct mci_platform_data *data) {}
 #endif
 
 /* --------------------------------------------------------------------
@@ -542,7 +568,7 @@ static struct i2c_gpio_platform_data pdata = {
 
 static struct platform_device at91sam9263_twi_device = {
 	.name			= "i2c-gpio",
-	.id			= -1,
+	.id			= 0,
 	.dev.platform_data	= &pdata,
 };
 
@@ -574,8 +600,8 @@ static struct resource twi_resources[] = {
 };
 
 static struct platform_device at91sam9263_twi_device = {
-	.name		= "at91_i2c",
-	.id		= -1,
+	.name		= "i2c-at91sam9260",
+	.id		= 0,
 	.resource	= twi_resources,
 	.num_resources	= ARRAY_SIZE(twi_resources),
 };
@@ -807,7 +833,7 @@ void __init at91_add_device_can(struct at91_can_data *data) {}
 
 #if defined(CONFIG_FB_ATMEL) || defined(CONFIG_FB_ATMEL_MODULE)
 static u64 lcdc_dmamask = DMA_BIT_MASK(32);
-static struct atmel_lcdfb_info lcdc_data;
+static struct atmel_lcdfb_pdata lcdc_data;
 
 static struct resource lcdc_resources[] = {
 	[0] = {
@@ -823,7 +849,7 @@ static struct resource lcdc_resources[] = {
 };
 
 static struct platform_device at91_lcdc_device = {
-	.name		= "atmel_lcdfb",
+	.name		= "at91sam9263-lcdfb",
 	.id		= 0,
 	.dev		= {
 				.dma_mask		= &lcdc_dmamask,
@@ -834,7 +860,7 @@ static struct platform_device at91_lcdc_device = {
 	.num_resources	= ARRAY_SIZE(lcdc_resources),
 };
 
-void __init at91_add_device_lcdc(struct atmel_lcdfb_info *data)
+void __init at91_add_device_lcdc(struct atmel_lcdfb_pdata *data)
 {
 	if (!data)
 		return;
@@ -866,7 +892,7 @@ void __init at91_add_device_lcdc(struct atmel_lcdfb_info *data)
 	platform_device_register(&at91_lcdc_device);
 }
 #else
-void __init at91_add_device_lcdc(struct atmel_lcdfb_info *data) {}
+void __init at91_add_device_lcdc(struct atmel_lcdfb_pdata *data) {}
 #endif
 
 
@@ -1174,7 +1200,7 @@ static struct resource ssc0_resources[] = {
 };
 
 static struct platform_device at91sam9263_ssc0_device = {
-	.name	= "ssc",
+	.name	= "at91rm9200_ssc",
 	.id	= 0,
 	.dev	= {
 		.dma_mask		= &ssc0_dmamask,
@@ -1216,7 +1242,7 @@ static struct resource ssc1_resources[] = {
 };
 
 static struct platform_device at91sam9263_ssc1_device = {
-	.name	= "ssc",
+	.name	= "at91rm9200_ssc",
 	.id	= 1,
 	.dev	= {
 		.dma_mask		= &ssc1_dmamask,
@@ -1299,6 +1325,7 @@ static struct resource dbgu_resources[] = {
 static struct atmel_uart_data dbgu_data = {
 	.use_dma_tx	= 0,
 	.use_dma_rx	= 0,		/* DBGU not capable of receive DMA */
+	.rts_gpio	= -EINVAL,
 };
 
 static u64 dbgu_dmamask = DMA_BIT_MASK(32);
@@ -1337,6 +1364,7 @@ static struct resource uart0_resources[] = {
 static struct atmel_uart_data uart0_data = {
 	.use_dma_tx	= 1,
 	.use_dma_rx	= 1,
+	.rts_gpio	= -EINVAL,
 };
 
 static u64 uart0_dmamask = DMA_BIT_MASK(32);
@@ -1380,6 +1408,7 @@ static struct resource uart1_resources[] = {
 static struct atmel_uart_data uart1_data = {
 	.use_dma_tx	= 1,
 	.use_dma_rx	= 1,
+	.rts_gpio	= -EINVAL,
 };
 
 static u64 uart1_dmamask = DMA_BIT_MASK(32);
@@ -1423,6 +1452,7 @@ static struct resource uart2_resources[] = {
 static struct atmel_uart_data uart2_data = {
 	.use_dma_tx	= 1,
 	.use_dma_rx	= 1,
+	.rts_gpio	= -EINVAL,
 };
 
 static u64 uart2_dmamask = DMA_BIT_MASK(32);

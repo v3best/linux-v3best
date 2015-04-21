@@ -12,6 +12,7 @@ struct pci_root_info {
 	char name[16];
 	unsigned int res_num;
 	struct resource *res;
+	resource_size_t *res_offset;
 	struct pci_sysdata sd;
 #ifdef	CONFIG_PCI_MMCONFIG
 	bool mcfg_added;
@@ -22,6 +23,7 @@ struct pci_root_info {
 };
 
 static bool pci_use_crs = true;
+static bool pci_ignore_seg = false;
 
 static int __init set_use_crs(const struct dmi_system_id *id)
 {
@@ -35,7 +37,14 @@ static int __init set_nouse_crs(const struct dmi_system_id *id)
 	return 0;
 }
 
-static const struct dmi_system_id pci_use_crs_table[] __initconst = {
+static int __init set_ignore_seg(const struct dmi_system_id *id)
+{
+	printk(KERN_INFO "PCI: %s detected: ignoring ACPI _SEG\n", id->ident);
+	pci_ignore_seg = true;
+	return 0;
+}
+
+static const struct dmi_system_id pci_crs_quirks[] __initconst = {
 	/* http://bugzilla.kernel.org/show_bug.cgi?id=14183 */
 	{
 		.callback = set_use_crs,
@@ -98,6 +107,16 @@ static const struct dmi_system_id pci_use_crs_table[] __initconst = {
 			DMI_MATCH(DMI_BIOS_VERSION, "6JET85WW (1.43 )"),
 		},
 	},
+
+	/* https://bugzilla.kernel.org/show_bug.cgi?id=15362 */
+	{
+		.callback = set_ignore_seg,
+		.ident = "HP xw9300",
+		.matches = {
+			DMI_MATCH(DMI_SYS_VENDOR, "Hewlett-Packard"),
+			DMI_MATCH(DMI_PRODUCT_NAME, "HP xw9300 Workstation"),
+		},
+	},
 	{}
 };
 
@@ -108,7 +127,7 @@ void __init pci_acpi_crs_quirks(void)
 	if (dmi_get_date(DMI_BIOS_DATE, &year, NULL, NULL) && year < 2008)
 		pci_use_crs = false;
 
-	dmi_check_system(pci_use_crs_table);
+	dmi_check_system(pci_crs_quirks);
 
 	/*
 	 * If the user specifies "pci=use_crs" or "pci=nocrs" explicitly, that
@@ -126,7 +145,7 @@ void __init pci_acpi_crs_quirks(void)
 }
 
 #ifdef	CONFIG_PCI_MMCONFIG
-static int __devinit check_segment(u16 seg, struct device *dev, char *estr)
+static int check_segment(u16 seg, struct device *dev, char *estr)
 {
 	if (seg) {
 		dev_err(dev,
@@ -149,9 +168,8 @@ static int __devinit check_segment(u16 seg, struct device *dev, char *estr)
 	return 0;
 }
 
-static int __devinit setup_mcfg_map(struct pci_root_info *info,
-				    u16 seg, u8 start, u8 end,
-				    phys_addr_t addr)
+static int setup_mcfg_map(struct pci_root_info *info, u16 seg, u8 start,
+			  u8 end, phys_addr_t addr)
 {
 	int result;
 	struct device *dev = &info->bridge->dev;
@@ -189,7 +207,7 @@ static void teardown_mcfg_map(struct pci_root_info *info)
 	}
 }
 #else
-static int __devinit setup_mcfg_map(struct pci_root_info *info,
+static int setup_mcfg_map(struct pci_root_info *info,
 				    u16 seg, u8 start, u8 end,
 				    phys_addr_t addr)
 {
@@ -200,9 +218,8 @@ static void teardown_mcfg_map(struct pci_root_info *info)
 }
 #endif
 
-static acpi_status
-resource_to_addr(struct acpi_resource *resource,
-			struct acpi_resource_address64 *addr)
+static acpi_status resource_to_addr(struct acpi_resource *resource,
+				    struct acpi_resource_address64 *addr)
 {
 	acpi_status status;
 	struct acpi_resource_memory24 *memory24;
@@ -247,8 +264,7 @@ resource_to_addr(struct acpi_resource *resource,
 	return AE_ERROR;
 }
 
-static acpi_status
-count_resource(struct acpi_resource *acpi_res, void *data)
+static acpi_status count_resource(struct acpi_resource *acpi_res, void *data)
 {
 	struct pci_root_info *info = data;
 	struct acpi_resource_address64 addr;
@@ -260,8 +276,7 @@ count_resource(struct acpi_resource *acpi_res, void *data)
 	return AE_OK;
 }
 
-static acpi_status
-setup_resource(struct acpi_resource *acpi_res, void *data)
+static acpi_status setup_resource(struct acpi_resource *acpi_res, void *data)
 {
 	struct pci_root_info *info = data;
 	struct resource *res;
@@ -305,15 +320,12 @@ setup_resource(struct acpi_resource *acpi_res, void *data)
 	res->flags = flags;
 	res->start = start;
 	res->end = end;
-	res->child = NULL;
+	info->res_offset[info->res_num] = addr.translation_offset;
+	info->res_num++;
 
-	if (!pci_use_crs) {
+	if (!pci_use_crs)
 		dev_printk(KERN_DEBUG, &info->bridge->dev,
 			   "host bridge window %pR (ignored)\n", res);
-		return AE_OK;
-	}
-
-	info->res_num++;
 
 	return AE_OK;
 }
@@ -339,12 +351,12 @@ static void coalesce_windows(struct pci_root_info *info, unsigned long type)
 			 * the kernel resource tree doesn't allow overlaps.
 			 */
 			if (resource_overlaps(res1, res2)) {
-				res1->start = min(res1->start, res2->start);
-				res1->end = max(res1->end, res2->end);
+				res2->start = min(res1->start, res2->start);
+				res2->end = max(res1->end, res2->end);
 				dev_info(&info->bridge->dev,
 					 "host bridge window expanded to %pR; %pR ignored\n",
-					 res1, res2);
-				res2->flags = 0;
+					 res2, res1);
+				res1->flags = 0;
 			}
 		}
 	}
@@ -375,7 +387,8 @@ static void add_resources(struct pci_root_info *info,
 				 "ignoring host bridge window %pR (conflicts with %s %pR)\n",
 				 res, conflict->name, conflict);
 		else
-			pci_add_resource(resources, res);
+			pci_add_resource_offset(resources, res,
+					info->res_offset[i]);
 	}
 }
 
@@ -383,6 +396,8 @@ static void free_pci_root_info_res(struct pci_root_info *info)
 {
 	kfree(info->res);
 	info->res = NULL;
+	kfree(info->res_offset);
+	info->res_offset = NULL;
 	info->res_num = 0;
 }
 
@@ -417,9 +432,9 @@ static void release_pci_root_info(struct pci_host_bridge *bridge)
 	__release_pci_root_info(info);
 }
 
-static void
-probe_pci_root_info(struct pci_root_info *info, struct acpi_device *device,
-		    int busnum, int domain)
+static void probe_pci_root_info(struct pci_root_info *info,
+				struct acpi_device *device,
+				int busnum, int domain)
 {
 	size_t size;
 
@@ -433,28 +448,38 @@ probe_pci_root_info(struct pci_root_info *info, struct acpi_device *device,
 		return;
 
 	size = sizeof(*info->res) * info->res_num;
-	info->res_num = 0;
-	info->res = kmalloc(size, GFP_KERNEL);
-	if (!info->res)
+	info->res = kzalloc(size, GFP_KERNEL);
+	if (!info->res) {
+		info->res_num = 0;
 		return;
+	}
+
+	size = sizeof(*info->res_offset) * info->res_num;
+	info->res_num = 0;
+	info->res_offset = kzalloc(size, GFP_KERNEL);
+	if (!info->res_offset) {
+		kfree(info->res);
+		info->res = NULL;
+		return;
+	}
 
 	acpi_walk_resources(device->handle, METHOD_NAME__CRS, setup_resource,
 				info);
 }
 
-struct pci_bus * __devinit pci_acpi_scan_root(struct acpi_pci_root *root)
+struct pci_bus *pci_acpi_scan_root(struct acpi_pci_root *root)
 {
 	struct acpi_device *device = root->device;
-	struct pci_root_info *info = NULL;
+	struct pci_root_info *info;
 	int domain = root->segment;
 	int busnum = root->secondary.start;
 	LIST_HEAD(resources);
-	struct pci_bus *bus = NULL;
+	struct pci_bus *bus;
 	struct pci_sysdata *sd;
 	int node;
-#ifdef CONFIG_ACPI_NUMA
-	int pxm;
-#endif
+
+	if (pci_ignore_seg)
+		domain = 0;
 
 	if (domain && !pci_domains_supported) {
 		printk(KERN_WARNING "pci_bus %04x:%02x: "
@@ -463,19 +488,12 @@ struct pci_bus * __devinit pci_acpi_scan_root(struct acpi_pci_root *root)
 		return NULL;
 	}
 
-	node = -1;
-#ifdef CONFIG_ACPI_NUMA
-	pxm = acpi_get_pxm(device->handle);
-	if (pxm >= 0)
-		node = pxm_to_node(pxm);
-	if (node != -1)
-		set_mp_bus_to_node(busnum, node);
-	else
-#endif
-		node = get_mp_bus_to_node(busnum);
+	node = acpi_get_node(device->handle);
+	if (node == NUMA_NO_NODE)
+		node = x86_pci_root_bus_node(busnum);
 
-	if (node != -1 && !node_online(node))
-		node = -1;
+	if (node != NUMA_NO_NODE && !node_online(node))
+		node = NUMA_NO_NODE;
 
 	info = kzalloc(sizeof(*info), GFP_KERNEL);
 	if (!info) {
@@ -487,15 +505,13 @@ struct pci_bus * __devinit pci_acpi_scan_root(struct acpi_pci_root *root)
 	sd = &info->sd;
 	sd->domain = domain;
 	sd->node = node;
-	/*
-	 * Maybe the desired pci bus has been already scanned. In such case
-	 * it is unnecessary to scan the pci bus with the given domain,busnum.
-	 */
+	sd->companion = device;
+
 	bus = pci_find_bus(domain, busnum);
 	if (bus) {
 		/*
-		 * If the desired bus exits, the content of bus->sysdata will
-		 * be replaced by sd.
+		 * If the desired bus has been scanned already, replace
+		 * its bus->sysdata.
 		 */
 		memcpy(bus->sysdata, sd, sizeof(*sd));
 		kfree(info);
@@ -536,26 +552,22 @@ struct pci_bus * __devinit pci_acpi_scan_root(struct acpi_pci_root *root)
 	 */
 	if (bus) {
 		struct pci_bus *child;
-		list_for_each_entry(child, &bus->children, node) {
-			struct pci_dev *self = child->self;
-			if (!self)
-				continue;
-
-			pcie_bus_configure_settings(child, self->pcie_mpss);
-		}
+		list_for_each_entry(child, &bus->children, node)
+			pcie_bus_configure_settings(child);
 	}
 
-	if (bus && node != -1) {
-#ifdef CONFIG_ACPI_NUMA
-		if (pxm >= 0)
-			dev_printk(KERN_DEBUG, &bus->dev,
-				   "on NUMA node %d (pxm %d)\n", node, pxm);
-#else
+	if (bus && node != NUMA_NO_NODE)
 		dev_printk(KERN_DEBUG, &bus->dev, "on NUMA node %d\n", node);
-#endif
-	}
 
 	return bus;
+}
+
+int pcibios_root_bridge_prepare(struct pci_host_bridge *bridge)
+{
+	struct pci_sysdata *sd = bridge->bus->sysdata;
+
+	ACPI_COMPANION_SET(&bridge->dev, sd->companion);
+	return 0;
 }
 
 int __init pci_acpi_init(void)

@@ -15,7 +15,6 @@
  */
 
 #include <linux/platform_device.h>
-#include <linux/init.h>
 #include <linux/input.h>
 #include <linux/interrupt.h>
 #include <linux/module.h>
@@ -203,7 +202,7 @@ static void lpc32xx_ts_close(struct input_dev *dev)
 	lpc32xx_stop_tsc(tsc);
 }
 
-static int __devinit lpc32xx_ts_probe(struct platform_device *pdev)
+static int lpc32xx_ts_probe(struct platform_device *pdev)
 {
 	struct lpc32xx_tsc *tsc;
 	struct input_dev *input;
@@ -309,7 +308,7 @@ err_free_mem:
 	return error;
 }
 
-static int __devexit lpc32xx_ts_remove(struct platform_device *pdev)
+static int lpc32xx_ts_remove(struct platform_device *pdev)
 {
 	struct lpc32xx_tsc *tsc = platform_get_drvdata(pdev);
 	struct resource *res;
@@ -394,7 +393,7 @@ MODULE_DEVICE_TABLE(of, lpc32xx_tsc_of_match);
 
 static struct platform_driver lpc32xx_ts_driver = {
 	.probe		= lpc32xx_ts_probe,
-	.remove		= __devexit_p(lpc32xx_ts_remove),
+	.remove		= lpc32xx_ts_remove,
 	.driver		= {
 		.name	= MOD_NAME,
 		.owner	= THIS_MODULE,

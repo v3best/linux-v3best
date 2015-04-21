@@ -16,8 +16,10 @@ hostprogs-$(CONFIG_VT)           += conmakehash
 hostprogs-$(CONFIG_IKCONFIG)     += bin2c
 hostprogs-$(BUILD_C_RECORDMCOUNT) += recordmcount
 hostprogs-$(CONFIG_BUILDTIME_EXTABLE_SORT) += sortextable
+hostprogs-$(CONFIG_ASN1)	 += asn1_compiler
 
 HOSTCFLAGS_sortextable.o = -I$(srctree)/tools/include
+HOSTCFLAGS_asn1_compiler.o = -I$(srctree)/include
 
 always		:= $(hostprogs-y) $(hostprogs-m)
 
@@ -25,10 +27,10 @@ always		:= $(hostprogs-y) $(hostprogs-m)
 hostprogs-y += unifdef docproc
 
 # These targets are used internally to avoid "is up to date" messages
-PHONY += build_unifdef
-build_unifdef: scripts/unifdef FORCE
+PHONY += build_unifdef build_docproc
+build_unifdef: $(obj)/unifdef
 	@:
-build_docproc: scripts/docproc FORCE
+build_docproc: $(obj)/docproc
 	@:
 
 subdir-$(CONFIG_MODVERSIONS) += genksyms

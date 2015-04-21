@@ -32,11 +32,10 @@
 
 #include <asm/mach-types.h>
 
-#include <plat/board-ams-delta.h>
-#include <plat/mcbsp.h>
+#include <mach/board-ams-delta.h>
+#include <linux/platform_data/asoc-ti-mcbsp.h>
 
 #include "omap-mcbsp.h"
-#include "omap-pcm.h"
 #include "../codecs/cx20442.h"
 
 
@@ -104,60 +103,62 @@ static int ams_delta_set_audio_mode(struct snd_kcontrol *kcontrol,
 	if (!codec->hw_write)
 		return -EUNATCH;
 
-	if (ucontrol->value.enumerated.item[0] >= control->max)
+	if (ucontrol->value.enumerated.item[0] >= control->items)
 		return -EINVAL;
 
-	mutex_lock(&codec->mutex);
+	snd_soc_dapm_mutex_lock(dapm);
 
 	/* Translate selection to bitmap */
 	pins = ams_delta_audio_mode_pins[ucontrol->value.enumerated.item[0]];
 
 	/* Setup pins after corresponding bits if changed */
 	pin = !!(pins & (1 << AMS_DELTA_MOUTHPIECE));
+
 	if (pin != snd_soc_dapm_get_pin_status(dapm, "Mouthpiece")) {
 		changed = 1;
 		if (pin)
-			snd_soc_dapm_enable_pin(dapm, "Mouthpiece");
+			snd_soc_dapm_enable_pin_unlocked(dapm, "Mouthpiece");
 		else
-			snd_soc_dapm_disable_pin(dapm, "Mouthpiece");
+			snd_soc_dapm_disable_pin_unlocked(dapm, "Mouthpiece");
 	}
 	pin = !!(pins & (1 << AMS_DELTA_EARPIECE));
 	if (pin != snd_soc_dapm_get_pin_status(dapm, "Earpiece")) {
 		changed = 1;
 		if (pin)
-			snd_soc_dapm_enable_pin(dapm, "Earpiece");
+			snd_soc_dapm_enable_pin_unlocked(dapm, "Earpiece");
 		else
-			snd_soc_dapm_disable_pin(dapm, "Earpiece");
+			snd_soc_dapm_disable_pin_unlocked(dapm, "Earpiece");
 	}
 	pin = !!(pins & (1 << AMS_DELTA_MICROPHONE));
 	if (pin != snd_soc_dapm_get_pin_status(dapm, "Microphone")) {
 		changed = 1;
 		if (pin)
-			snd_soc_dapm_enable_pin(dapm, "Microphone");
+			snd_soc_dapm_enable_pin_unlocked(dapm, "Microphone");
 		else
-			snd_soc_dapm_disable_pin(dapm, "Microphone");
+			snd_soc_dapm_disable_pin_unlocked(dapm, "Microphone");
 	}
 	pin = !!(pins & (1 << AMS_DELTA_SPEAKER));
 	if (pin != snd_soc_dapm_get_pin_status(dapm, "Speaker")) {
 		changed = 1;
 		if (pin)
-			snd_soc_dapm_enable_pin(dapm, "Speaker");
+			snd_soc_dapm_enable_pin_unlocked(dapm, "Speaker");
 		else
-			snd_soc_dapm_disable_pin(dapm, "Speaker");
+			snd_soc_dapm_disable_pin_unlocked(dapm, "Speaker");
 	}
 	pin = !!(pins & (1 << AMS_DELTA_AGC));
 	if (pin != ams_delta_audio_agc) {
 		ams_delta_audio_agc = pin;
 		changed = 1;
 		if (pin)
-			snd_soc_dapm_enable_pin(dapm, "AGCIN");
+			snd_soc_dapm_enable_pin_unlocked(dapm, "AGCIN");
 		else
-			snd_soc_dapm_disable_pin(dapm, "AGCIN");
+			snd_soc_dapm_disable_pin_unlocked(dapm, "AGCIN");
 	}
-	if (changed)
-		snd_soc_dapm_sync(dapm);
 
-	mutex_unlock(&codec->mutex);
+	if (changed)
+		snd_soc_dapm_sync_unlocked(dapm);
+
+	snd_soc_dapm_mutex_unlock(dapm);
 
 	return changed;
 }
@@ -195,13 +196,11 @@ static int ams_delta_get_audio_mode(struct snd_kcontrol *kcontrol,
 	return 0;
 }
 
-static const struct soc_enum ams_delta_audio_enum[] = {
-	SOC_ENUM_SINGLE_EXT(ARRAY_SIZE(ams_delta_audio_mode),
-						ams_delta_audio_mode),
-};
+static const SOC_ENUM_SINGLE_EXT_DECL(ams_delta_audio_enum,
+				      ams_delta_audio_mode);
 
 static const struct snd_kcontrol_new ams_delta_audio_controls[] = {
-	SOC_ENUM_EXT("Audio Mode", ams_delta_audio_enum[0],
+	SOC_ENUM_EXT("Audio Mode", ams_delta_audio_enum,
 			ams_delta_get_audio_mode, ams_delta_set_audio_mode),
 };
 
@@ -316,12 +315,17 @@ static void cx81801_close(struct tty_struct *tty)
 	v253_ops.close(tty);
 
 	/* Revert back to default audio input/output constellation */
-	snd_soc_dapm_disable_pin(dapm, "Mouthpiece");
-	snd_soc_dapm_enable_pin(dapm, "Earpiece");
-	snd_soc_dapm_enable_pin(dapm, "Microphone");
-	snd_soc_dapm_disable_pin(dapm, "Speaker");
-	snd_soc_dapm_disable_pin(dapm, "AGCIN");
-	snd_soc_dapm_sync(dapm);
+	snd_soc_dapm_mutex_lock(dapm);
+
+	snd_soc_dapm_disable_pin_unlocked(dapm, "Mouthpiece");
+	snd_soc_dapm_enable_pin_unlocked(dapm, "Earpiece");
+	snd_soc_dapm_enable_pin_unlocked(dapm, "Microphone");
+	snd_soc_dapm_disable_pin_unlocked(dapm, "Speaker");
+	snd_soc_dapm_disable_pin_unlocked(dapm, "AGCIN");
+
+	snd_soc_dapm_sync_unlocked(dapm);
+
+	snd_soc_dapm_mutex_unlock(dapm);
 }
 
 /* Line discipline .hangup() */
@@ -575,56 +579,53 @@ static struct snd_soc_card ams_delta_audio_card = {
 };
 
 /* Module init/exit */
-static struct platform_device *ams_delta_audio_platform_device;
-static struct platform_device *cx20442_platform_device;
-
-static int __init ams_delta_module_init(void)
+static int ams_delta_probe(struct platform_device *pdev)
 {
+	struct snd_soc_card *card = &ams_delta_audio_card;
 	int ret;
 
-	if (!(machine_is_ams_delta()))
-		return -ENODEV;
+	card->dev = &pdev->dev;
 
-	ams_delta_audio_platform_device =
-			platform_device_alloc("soc-audio", -1);
-	if (!ams_delta_audio_platform_device)
-		return -ENOMEM;
-
-	platform_set_drvdata(ams_delta_audio_platform_device,
-				&ams_delta_audio_card);
-
-	ret = platform_device_add(ams_delta_audio_platform_device);
-	if (ret)
-		goto err;
-
-	/*
-	 * Codec platform device could be registered from elsewhere (board?),
-	 * but I do it here as it makes sense only if used with the card.
-	 */
-	cx20442_platform_device =
-		platform_device_register_simple("cx20442-codec", -1, NULL, 0);
+	ret = snd_soc_register_card(card);
+	if (ret) {
+		dev_err(&pdev->dev, "snd_soc_register_card failed (%d)\n", ret);
+		card->dev = NULL;
+		return ret;
+	}
 	return 0;
-err:
-	platform_device_put(ams_delta_audio_platform_device);
-	return ret;
 }
-late_initcall(ams_delta_module_init);
 
-static void __exit ams_delta_module_exit(void)
+static int ams_delta_remove(struct platform_device *pdev)
 {
+	struct snd_soc_card *card = platform_get_drvdata(pdev);
+
 	if (tty_unregister_ldisc(N_V253) != 0)
-		dev_warn(&ams_delta_audio_platform_device->dev,
+		dev_warn(&pdev->dev,
 			"failed to unregister V253 line discipline\n");
 
 	snd_soc_jack_free_gpios(&ams_delta_hook_switch,
 			ARRAY_SIZE(ams_delta_hook_switch_gpios),
 			ams_delta_hook_switch_gpios);
 
-	platform_device_unregister(cx20442_platform_device);
-	platform_device_unregister(ams_delta_audio_platform_device);
+	snd_soc_unregister_card(card);
+	card->dev = NULL;
+	return 0;
 }
-module_exit(ams_delta_module_exit);
+
+#define DRV_NAME "ams-delta-audio"
+
+static struct platform_driver ams_delta_driver = {
+	.driver = {
+		.name = DRV_NAME,
+		.owner = THIS_MODULE,
+	},
+	.probe = ams_delta_probe,
+	.remove = ams_delta_remove,
+};
+
+module_platform_driver(ams_delta_driver);
 
 MODULE_AUTHOR("Janusz Krzysztofik <jkrzyszt@tis.icnet.pl>");
 MODULE_DESCRIPTION("ALSA SoC driver for Amstrad E3 (Delta) videophone");
 MODULE_LICENSE("GPL");
+MODULE_ALIAS("platform:" DRV_NAME);

@@ -38,49 +38,25 @@
 #define TX_HZ	2000
 #define TX_INTERVAL	(1000000/TX_HZ)
 
-/*#define DEBUG*/
-
 static int init_sdio(struct sdiowm_dev *sdev);
 static void release_sdio(struct sdiowm_dev *sdev);
 
-#ifdef DEBUG
-static void hexdump(char *title, u8 *data, int len)
-{
-	int i;
-
-	printk(KERN_DEBUG "%s: length = %d\n", title, len);
-	for (i = 0; i < len; i++) {
-		printk(KERN_DEBUG "%02x ", data[i]);
-		if ((i & 0xf) == 0xf)
-			printk(KERN_DEBUG "\n");
-	}
-	printk(KERN_DEBUG "\n");
-}
-#endif
-
 static struct sdio_tx *alloc_tx_struct(struct tx_cxt *tx)
 {
-	struct sdio_tx *t = NULL;
+	struct sdio_tx *t = kzalloc(sizeof(*t), GFP_ATOMIC);
 
-	t = kmalloc(sizeof(*t), GFP_ATOMIC);
-	if (t == NULL)
-		goto out;
-
-	memset(t, 0, sizeof(*t));
+	if (!t)
+		return NULL;
 
 	t->buf = kmalloc(TX_BUF_SIZE, GFP_ATOMIC);
-	if (t->buf == NULL)
-		goto out;
+	if (!t->buf) {
+		kfree(t);
+		return NULL;
+	}
 
 	t->tx_cxt = tx;
 
 	return t;
-out:
-	if (t) {
-		kfree(t->buf);
-		kfree(t);
-	}
-	return NULL;
 }
 
 static void free_tx_struct(struct sdio_tx *t)
@@ -93,20 +69,12 @@ static void free_tx_struct(struct sdio_tx *t)
 
 static struct sdio_rx *alloc_rx_struct(struct rx_cxt *rx)
 {
-	struct sdio_rx *r = NULL;
+	struct sdio_rx *r = kzalloc(sizeof(*r), GFP_ATOMIC);
 
-	r = kmalloc(sizeof(*r), GFP_ATOMIC);
-	if (r == NULL)
-		goto out;
-
-	memset(r, 0, sizeof(*r));
-
-	r->rx_cxt = rx;
+	if (r)
+		r->rx_cxt = rx;
 
 	return r;
-out:
-	kfree(r);
-	return NULL;
 }
 
 static void free_rx_struct(struct sdio_rx *r)
@@ -171,10 +139,8 @@ static int init_sdio(struct sdiowm_dev *sdev)
 	spin_lock_init(&tx->lock);
 
 	tx->sdu_buf = kmalloc(SDU_TX_BUF_SIZE, GFP_KERNEL);
-	if (tx->sdu_buf == NULL) {
-		printk(KERN_ERR "Failed to allocate SDU tx buffer.\n");
+	if (tx->sdu_buf == NULL)
 		goto fail;
-	}
 
 	for (i = 0; i < MAX_NR_SDU_BUF; i++) {
 		t = alloc_tx_struct(tx);
@@ -200,10 +166,8 @@ static int init_sdio(struct sdiowm_dev *sdev)
 	}
 
 	rx->rx_buf = kmalloc(RX_BUF_SIZE, GFP_KERNEL);
-	if (rx->rx_buf == NULL) {
-		printk(KERN_ERR "Failed to allocate rx buffer.\n");
+	if (rx->rx_buf == NULL)
 		goto fail;
-	}
 
 	return 0;
 
@@ -261,7 +225,8 @@ static void send_sdio_pkt(struct sdio_func *func, u8 *data, int len)
 		ret = sdio_memcpy_toio(func, 0, data, n);
 		if (ret < 0) {
 			if (ret != -ENOMEDIUM)
-				printk(KERN_ERR "gdmwms: %s error: ret = %d\n",
+				dev_err(&func->dev,
+					"gdmwms: %s error: ret = %d\n",
 					__func__, ret);
 			goto end_io;
 		}
@@ -274,7 +239,8 @@ static void send_sdio_pkt(struct sdio_func *func, u8 *data, int len)
 		ret = sdio_memcpy_toio(func, 0, data + n, remain);
 		if (ret < 0) {
 			if (ret != -ENOMEDIUM)
-				printk(KERN_ERR "gdmwms: %s error: ret = %d\n",
+				dev_err(&func->dev,
+					"gdmwms: %s error: ret = %d\n",
 					__func__, ret);
 			goto end_io;
 		}
@@ -314,10 +280,9 @@ static void send_sdu(struct sdio_func *func, struct tx_cxt *tx)
 
 	spin_unlock_irqrestore(&tx->lock, flags);
 
-#ifdef DEBUG
-	hexdump("sdio_send", tx->sdu_buf + TYPE_A_HEADER_SIZE,
-		aggr_len - TYPE_A_HEADER_SIZE);
-#endif
+	print_hex_dump_debug("sdio_send: ", DUMP_PREFIX_NONE, 16, 1,
+			     tx->sdu_buf + TYPE_A_HEADER_SIZE,
+			     aggr_len - TYPE_A_HEADER_SIZE, false);
 
 	for (pos = TYPE_A_HEADER_SIZE; pos < aggr_len; pos += TX_CHUNK_SIZE) {
 		len = aggr_len - pos;
@@ -352,10 +317,9 @@ static void send_hci(struct sdio_func *func, struct tx_cxt *tx,
 {
 	unsigned long flags;
 
-#ifdef DEBUG
-	hexdump("sdio_send", t->buf + TYPE_A_HEADER_SIZE,
-		t->len - TYPE_A_HEADER_SIZE);
-#endif
+	print_hex_dump_debug("sdio_send: ", DUMP_PREFIX_NONE, 16, 1,
+			     t->buf + TYPE_A_HEADER_SIZE,
+			     t->len - TYPE_A_HEADER_SIZE, false);
 	send_sdio_pkt(func, t->buf, t->len);
 
 	spin_lock_irqsave(&tx->lock, flags);
@@ -491,14 +455,10 @@ static int control_sdu_tx_flow(struct sdiowm_dev *sdev, u8 *hci_data, int len)
 		goto out;
 
 	if (hci_data[4] == 0) {
-#ifdef DEBUG
-		printk(KERN_DEBUG "WIMAX ==> STOP SDU TX\n");
-#endif
+		dev_dbg(&sdev->func->dev, "WIMAX ==> STOP SDU TX\n");
 		tx->stop_sdu_tx = 1;
 	} else if (hci_data[4] == 1) {
-#ifdef DEBUG
-		printk(KERN_DEBUG "WIMAX ==> START SDU TX\n");
-#endif
+		dev_dbg(&sdev->func->dev, "WIMAX ==> START SDU TX\n");
 		tx->stop_sdu_tx = 0;
 		if (tx->can_send)
 			schedule_work(&sdev->ws);
@@ -537,29 +497,26 @@ static void gdm_sdio_irq(struct sdio_func *func)
 
 	ret = sdio_memcpy_fromio(func, hdr, 0x0, TYPE_A_LOOKAHEAD_SIZE);
 	if (ret) {
-		printk(KERN_ERR "Cannot read from function %d\n", func->num);
+		dev_err(&func->dev,
+			"Cannot read from function %d\n", func->num);
 		goto done;
 	}
 
 	len = (hdr[2] << 16) | (hdr[1] << 8) | hdr[0];
 	if (len > (RX_BUF_SIZE - TYPE_A_HEADER_SIZE)) {
-		printk(KERN_ERR "Too big Type-A size: %d\n", len);
+		dev_err(&func->dev, "Too big Type-A size: %d\n", len);
 		goto done;
 	}
 
 	if (hdr[3] == 1) {	/* Ack */
-#ifdef DEBUG
 		u32 *ack_seq = (u32 *)&hdr[4];
-#endif
 		spin_lock_irqsave(&tx->lock, flags);
 		tx->can_send = 1;
 
 		if (!list_empty(&tx->sdu_list) || !list_empty(&tx->hci_list))
 			schedule_work(&sdev->ws);
 		spin_unlock_irqrestore(&tx->lock, flags);
-#ifdef DEBUG
-		printk(KERN_DEBUG "Ack... %0x\n", ntohl(*ack_seq));
-#endif
+		dev_dbg(&func->dev, "Ack... %0x\n", ntohl(*ack_seq));
 		goto done;
 	}
 
@@ -577,8 +534,8 @@ static void gdm_sdio_irq(struct sdio_func *func)
 		n = blocks * func->cur_blksize;
 		ret = sdio_memcpy_fromio(func, buf, 0x0, n);
 		if (ret) {
-			printk(KERN_ERR "Cannot read from function %d\n",
-				func->num);
+			dev_err(&func->dev,
+				"Cannot read from function %d\n", func->num);
 			goto done;
 		}
 		buf += n;
@@ -588,16 +545,15 @@ static void gdm_sdio_irq(struct sdio_func *func)
 	if (remain) {
 		ret = sdio_memcpy_fromio(func, buf, 0x0, remain);
 		if (ret) {
-			printk(KERN_ERR "Cannot read from function %d\n",
-				func->num);
+			dev_err(&func->dev,
+				"Cannot read from function %d\n", func->num);
 			goto done;
 		}
 	}
 
 end_io:
-#ifdef DEBUG
-	hexdump("sdio_receive", rx->rx_buf, len);
-#endif
+	print_hex_dump_debug("sdio_receive: ", DUMP_PREFIX_NONE, 16, 1,
+			     rx->rx_buf, len, false);
 	len = control_sdu_tx_flow(sdev, rx->rx_buf, len);
 
 	spin_lock_irqsave(&rx->lock, flags);
@@ -652,9 +608,9 @@ static int sdio_wimax_probe(struct sdio_func *func,
 	struct phy_dev *phy_dev = NULL;
 	struct sdiowm_dev *sdev = NULL;
 
-	printk(KERN_INFO "Found GDM SDIO VID = 0x%04x PID = 0x%04x...\n",
-			func->vendor, func->device);
-	printk(KERN_INFO "GCT WiMax driver version %s\n", DRIVER_VERSION);
+	dev_info(&func->dev, "Found GDM SDIO VID = 0x%04x PID = 0x%04x...\n",
+		 func->vendor, func->device);
+	dev_info(&func->dev, "GCT WiMax driver version %s\n", DRIVER_VERSION);
 
 	sdio_claim_host(func);
 	sdio_enable_func(func);
@@ -680,7 +636,7 @@ static int sdio_wimax_probe(struct sdio_func *func,
 	phy_dev->rcv_func = gdm_sdio_receive;
 
 	ret = init_sdio(sdev);
-	if (sdev < 0)
+	if (ret < 0)
 		goto out;
 
 	sdev->func = func;
@@ -705,6 +661,7 @@ static void sdio_wimax_remove(struct sdio_func *func)
 	struct phy_dev *phy_dev = sdio_get_drvdata(func);
 	struct sdiowm_dev *sdev = phy_dev->priv_dev;
 
+	cancel_work_sync(&sdev->ws);
 	if (phy_dev->netdev)
 		unregister_wimax_device(phy_dev);
 	sdio_claim_host(func);

@@ -30,9 +30,12 @@
 #include <linux/mfd/core.h>
 #include <linux/mfd/tps65217.h>
 
-static struct mfd_cell tps65217s[] = {
+static const struct mfd_cell tps65217s[] = {
 	{
 		.name = "tps65217-pmic",
+	},
+	{
+		.name = "tps65217-bl",
 	},
 };
 
@@ -150,13 +153,14 @@ static const struct of_device_id tps65217_of_match[] = {
 	{ /* sentinel */ },
 };
 
-static int __devinit tps65217_probe(struct i2c_client *client,
+static int tps65217_probe(struct i2c_client *client,
 				const struct i2c_device_id *ids)
 {
 	struct tps65217 *tps;
 	unsigned int version;
-	unsigned int chip_id = ids->driver_data;
+	unsigned long chip_id = ids->driver_data;
 	const struct of_device_id *match;
+	bool status_off = false;
 	int ret;
 
 	if (client->dev.of_node) {
@@ -166,7 +170,9 @@ static int __devinit tps65217_probe(struct i2c_client *client,
 				"Failed to find matching dt id\n");
 			return -EINVAL;
 		}
-		chip_id = (unsigned int)match->data;
+		chip_id = (unsigned long)match->data;
+		status_off = of_property_read_bool(client->dev.of_node,
+					"ti,pmic-shutdown-controller");
 	}
 
 	if (!chip_id) {
@@ -204,6 +210,15 @@ static int __devinit tps65217_probe(struct i2c_client *client,
 		return ret;
 	}
 
+	/* Set the PMIC to shutdown on PWR_EN toggle */
+	if (status_off) {
+		ret = tps65217_set_bits(tps, TPS65217_REG_STATUS,
+				TPS65217_STATUS_OFF, TPS65217_STATUS_OFF,
+				TPS65217_PROTECT_NONE);
+		if (ret)
+			dev_warn(tps->dev, "unable to set the status OFF\n");
+	}
+
 	dev_info(tps->dev, "TPS65217 ID %#x version 1.%d\n",
 			(version & TPS65217_CHIPID_CHIP_MASK) >> 4,
 			version & TPS65217_CHIPID_REV_MASK);
@@ -211,7 +226,7 @@ static int __devinit tps65217_probe(struct i2c_client *client,
 	return 0;
 }
 
-static int __devexit tps65217_remove(struct i2c_client *client)
+static int tps65217_remove(struct i2c_client *client)
 {
 	struct tps65217 *tps = i2c_get_clientdata(client);
 
@@ -230,11 +245,11 @@ static struct i2c_driver tps65217_driver = {
 	.driver		= {
 		.name	= "tps65217",
 		.owner	= THIS_MODULE,
-		.of_match_table = of_match_ptr(tps65217_of_match),
+		.of_match_table = tps65217_of_match,
 	},
 	.id_table	= tps65217_id_table,
 	.probe		= tps65217_probe,
-	.remove		= __devexit_p(tps65217_remove),
+	.remove		= tps65217_remove,
 };
 
 static int __init tps65217_init(void)

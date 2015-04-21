@@ -1,11 +1,10 @@
-menu "Rpmsg drivers (EXPERIMENTAL)"
+menu "Rpmsg drivers"
 
 # RPMSG always gets selected by whoever wants it
 config RPMSG
 	tristate
 	select VIRTIO
-	select VIRTIO_RING
-	depends on EXPERIMENTAL
+	select VIRTUALIZATION
 
 config RPMSG_SERVER_SAMPLE
 	tristate "An rpmsg server sample"
@@ -14,23 +13,11 @@ config RPMSG_SERVER_SAMPLE
 	  This is just a sample server driver for the rpmsg bus.
 	  Say either Y or M. You know you want to.
 
-config RPMSG_OMX
-	tristate "rpmsg OMX driver"
-	depends on RPMSG
-	---help---
-	  An rpmsg driver that exposes OMX API to user space, in order to
-	  allow multimedia applications to offload OMX processing to
-	  remote processors.
-
-	  If unsure, say N.
-
 config RPMSG_FREERTOS_STAT
 	tristate "An FreeRTOS statistic"
 	depends on RPMSG
 	---help---
 	  This is just a sample to get statistic from FreeRTOS.
 	  Say either Y or M. You know you want to.
-
-source "drivers/rpmsg/host/Kconfig"
 
 endmenu

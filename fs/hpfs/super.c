@@ -101,29 +101,35 @@ int hpfs_stop_cycles(struct super_block *s, int key, int *c1, int *c2,
 	return 0;
 }
 
-static void hpfs_put_super(struct super_block *s)
+static void free_sbi(struct hpfs_sb_info *sbi)
 {
-	struct hpfs_sb_info *sbi = hpfs_sb(s);
-
-	hpfs_lock(s);
-	unmark_dirty(s);
-	hpfs_unlock(s);
-
 	kfree(sbi->sb_cp_table);
 	kfree(sbi->sb_bmp_dir);
-	s->s_fs_info = NULL;
 	kfree(sbi);
 }
 
-unsigned hpfs_count_one_bitmap(struct super_block *s, secno secno)
+static void lazy_free_sbi(struct rcu_head *rcu)
+{
+	free_sbi(container_of(rcu, struct hpfs_sb_info, rcu));
+}
+
+static void hpfs_put_super(struct super_block *s)
+{
+	hpfs_lock(s);
+	unmark_dirty(s);
+	hpfs_unlock(s);
+	call_rcu(&hpfs_sb(s)->rcu, lazy_free_sbi);
+}
+
+static unsigned hpfs_count_one_bitmap(struct super_block *s, secno secno)
 {
 	struct quad_buffer_head qbh;
 	unsigned long *bits;
 	unsigned count;
 
-	bits = hpfs_map_4sectors(s, secno, &qbh, 4);
+	bits = hpfs_map_4sectors(s, secno, &qbh, 0);
 	if (!bits)
-		return 0;
+		return (unsigned)-1;
 	count = bitmap_weight(bits, 2048 * BITS_PER_BYTE);
 	hpfs_brelse4(&qbh);
 	return count;
@@ -134,9 +140,29 @@ static unsigned count_bitmaps(struct super_block *s)
 	unsigned n, count, n_bands;
 	n_bands = (hpfs_sb(s)->sb_fs_size + 0x3fff) >> 14;
 	count = 0;
-	for (n = 0; n < n_bands; n++)
-		count += hpfs_count_one_bitmap(s, le32_to_cpu(hpfs_sb(s)->sb_bmp_dir[n]));
+	for (n = 0; n < COUNT_RD_AHEAD; n++) {
+		hpfs_prefetch_bitmap(s, n);
+	}
+	for (n = 0; n < n_bands; n++) {
+		unsigned c;
+		hpfs_prefetch_bitmap(s, n + COUNT_RD_AHEAD);
+		c = hpfs_count_one_bitmap(s, le32_to_cpu(hpfs_sb(s)->sb_bmp_dir[n]));
+		if (c != (unsigned)-1)
+			count += c;
+	}
 	return count;
+}
+
+unsigned hpfs_get_free_dnodes(struct super_block *s)
+{
+	struct hpfs_sb_info *sbi = hpfs_sb(s);
+	if (sbi->sb_n_free_dnodes == (unsigned)-1) {
+		unsigned c = hpfs_count_one_bitmap(s, sbi->sb_dmap);
+		if (c == (unsigned)-1)
+			return 0;
+		sbi->sb_n_free_dnodes = c;
+	}
+	return sbi->sb_n_free_dnodes;
 }
 
 static int hpfs_statfs(struct dentry *dentry, struct kstatfs *buf)
@@ -144,19 +170,19 @@ static int hpfs_statfs(struct dentry *dentry, struct kstatfs *buf)
 	struct super_block *s = dentry->d_sb;
 	struct hpfs_sb_info *sbi = hpfs_sb(s);
 	u64 id = huge_encode_dev(s->s_bdev->bd_dev);
+
 	hpfs_lock(s);
 
-	/*if (sbi->sb_n_free == -1) {*/
+	if (sbi->sb_n_free == (unsigned)-1)
 		sbi->sb_n_free = count_bitmaps(s);
-		sbi->sb_n_free_dnodes = hpfs_count_one_bitmap(s, sbi->sb_dmap);
-	/*}*/
+
 	buf->f_type = s->s_magic;
 	buf->f_bsize = 512;
 	buf->f_blocks = sbi->sb_fs_size;
 	buf->f_bfree = sbi->sb_n_free;
 	buf->f_bavail = sbi->sb_n_free;
 	buf->f_files = sbi->sb_dirband_size / 4;
-	buf->f_ffree = sbi->sb_n_free_dnodes;
+	buf->f_ffree = hpfs_get_free_dnodes(s);
 	buf->f_fsid.val[0] = (u32)id;
 	buf->f_fsid.val[1] = (u32)(id >> 32);
 	buf->f_namelen = 254;
@@ -210,6 +236,11 @@ static int init_inodecache(void)
 
 static void destroy_inodecache(void)
 {
+	/*
+	 * Make sure all delayed rcu free inodes are flushed before we
+	 * destroy cache.
+	 */
+	rcu_barrier();
 	kmem_cache_destroy(hpfs_inode_cachep);
 }
 
@@ -251,7 +282,7 @@ static const match_table_t tokens = {
 	{Opt_err, NULL},
 };
 
-static int parse_opts(char *opts, uid_t *uid, gid_t *gid, umode_t *umask,
+static int parse_opts(char *opts, kuid_t *uid, kgid_t *gid, umode_t *umask,
 		      int *lowercase, int *eas, int *chk, int *errs,
 		      int *chkdsk, int *timeshift)
 {
@@ -276,12 +307,16 @@ static int parse_opts(char *opts, uid_t *uid, gid_t *gid, umode_t *umask,
 		case Opt_uid:
 			if (match_int(args, &option))
 				return 0;
-			*uid = option;
+			*uid = make_kuid(current_user_ns(), option);
+			if (!uid_valid(*uid))
+				return 0;
 			break;
 		case Opt_gid:
 			if (match_int(args, &option))
 				return 0;
-			*gid = option;
+			*gid = make_kgid(current_user_ns(), option);
+			if (!gid_valid(*gid))
+				return 0;
 			break;
 		case Opt_umask:
 			if (match_octal(args, &option))
@@ -378,18 +413,19 @@ HPFS filesystem options:\n\
 
 static int hpfs_remount_fs(struct super_block *s, int *flags, char *data)
 {
-	uid_t uid;
-	gid_t gid;
+	kuid_t uid;
+	kgid_t gid;
 	umode_t umask;
 	int lowercase, eas, chk, errs, chkdsk, timeshift;
 	int o;
 	struct hpfs_sb_info *sbi = hpfs_sb(s);
 	char *new_opts = kstrdup(data, GFP_KERNEL);
 	
+	sync_filesystem(s);
+
 	*flags |= MS_NOATIME;
 	
 	hpfs_lock(s);
-	lock_super(s);
 	uid = sbi->sb_uid; gid = sbi->sb_gid;
 	umask = 0777 & ~sbi->sb_mode;
 	lowercase = sbi->sb_lowercase;
@@ -422,12 +458,10 @@ static int hpfs_remount_fs(struct super_block *s, int *flags, char *data)
 
 	replace_mount_options(s, new_opts);
 
-	unlock_super(s);
 	hpfs_unlock(s);
 	return 0;
 
 out_err:
-	unlock_super(s);
 	hpfs_unlock(s);
 	kfree(new_opts);
 	return -EINVAL;
@@ -455,8 +489,8 @@ static int hpfs_fill_super(struct super_block *s, void *options, int silent)
 	struct hpfs_sb_info *sbi;
 	struct inode *root;
 
-	uid_t uid;
-	gid_t gid;
+	kuid_t uid;
+	kgid_t gid;
 	umode_t umask;
 	int lowercase, eas, chk, errs, chkdsk, timeshift;
 
@@ -473,9 +507,6 @@ static int hpfs_fill_super(struct super_block *s, void *options, int silent)
 		return -ENOMEM;
 	}
 	s->s_fs_info = sbi;
-
-	sbi->sb_bmp_dir = NULL;
-	sbi->sb_cp_table = NULL;
 
 	mutex_init(&sbi->hpfs_mutex);
 	hpfs_lock(s);
@@ -552,7 +583,13 @@ static int hpfs_fill_super(struct super_block *s, void *options, int silent)
 	sbi->sb_cp_table = NULL;
 	sbi->sb_c_bitmap = -1;
 	sbi->sb_max_fwd_alloc = 0xffffff;
-	
+
+	if (sbi->sb_fs_size >= 0x80000000) {
+		hpfs_error(s, "invalid size in superblock: %08x",
+			(unsigned)sbi->sb_fs_size);
+		goto bail4;
+	}
+
 	/* Load bitmap directory */
 	if (!(sbi->sb_bmp_dir = hpfs_load_bitmap_directory(s, le32_to_cpu(superblock->bitmaps))))
 		goto bail4;
@@ -662,10 +699,7 @@ bail2:	brelse(bh0);
 bail1:
 bail0:
 	hpfs_unlock(s);
-	kfree(sbi->sb_bmp_dir);
-	kfree(sbi->sb_cp_table);
-	s->s_fs_info = NULL;
-	kfree(sbi);
+	free_sbi(sbi);
 	return -EINVAL;
 }
 
@@ -682,6 +716,7 @@ static struct file_system_type hpfs_fs_type = {
 	.kill_sb	= kill_block_super,
 	.fs_flags	= FS_REQUIRES_DEV,
 };
+MODULE_ALIAS_FS("hpfs");
 
 static int __init init_hpfs_fs(void)
 {

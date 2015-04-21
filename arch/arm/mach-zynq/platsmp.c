@@ -2,7 +2,7 @@
  * This file contains Xilinx specific SMP code, used to start up
  * the second processor.
  *
- * Copyright (C) 2011 Xilinx
+ * Copyright (C) 2011-2013 Xilinx
  *
  * based on linux/arch/arm/mach-realview/platsmp.c
  *
@@ -17,200 +17,149 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  */
-#include <linux/module.h>
+
+#include <linux/export.h>
 #include <linux/jiffies.h>
 #include <linux/init.h>
 #include <linux/io.h>
 #include <asm/cacheflush.h>
 #include <asm/smp_scu.h>
-#include <asm/hardware/gic.h>
-#include <mach/zynq_soc.h>
+#include <linux/irqchip/arm-gic.h>
 #include "common.h"
 
-extern void secondary_startup(void);
-
-static DEFINE_SPINLOCK(boot_lock);
-
-/* Store pointer to ioremap area which points to address 0x0 */
-static u8 *zero;
-
-static u32 mem_backup[3];
-static u32 mem_backup_done;
-
-/* Secondary CPU kernel startup is a 2 step process. The primary CPU
- * starts the secondary CPU by giving it the address of the kernel and
- * then sending it an event to wake it up. The secondary CPU then
- * starts the kernel and tells the primary CPU it's up and running.
- */
-void __cpuinit platform_secondary_init(unsigned int cpu)
-{
-	/*
-	 * if any interrupts are already enabled for the primary
-	 * core (e.g. timer irq), then they will not have been enabled
-	 * for us: do so
-	 */
-	gic_secondary_init(0);
-
-	/* Indicate to the primary core that the secondary is up and running.
-	 * Let the write buffer drain.
-	 */
-
-	/* Restore memory content */
-	if (mem_backup_done) {
-		__raw_writel(mem_backup[0], zero + 0x0);
-		__raw_writel(mem_backup[1], zero + 0x4);
-		__raw_writel(mem_backup[2], zero + 0x8);
-	}
-
-
-	/*
-	 * Synchronise with the boot thread.
-	 */
-	spin_lock(&boot_lock);
-	spin_unlock(&boot_lock);
-}
-
 /*
- * Store pointer to SLCR registers. SLCR driver can't be used because
- * it is not initialized yet and this code is used for bootup the second CPU
+ * Store number of cores in the system
+ * Because of scu_get_core_count() must be in __init section and can't
+ * be called from zynq_cpun_start() because it is not in __init section.
  */
-#define SLCR_UNLOCK	0xDF0D
-#define SLCR_LOCK	0x767B
+static int ncores;
 
-static u8 *slcr;
-
-int zynq_cpu1_start(u32 address)
+int zynq_cpun_start(u32 address, int cpu)
 {
-	if (!slcr) {
-		printk(KERN_INFO "Map SLCR registers\n");
-		/* Remap the SLCR registers to be able to work with cpu1 */
-		slcr = ioremap(0xF8000000, PAGE_SIZE);
-		if (!slcr) {
-			printk(KERN_WARNING
-				"!!!! SLCR jump vectors can't be used !!!!\n");
-			return -1;
-		}
-	}
-	mem_backup_done = 0;
+	u32 trampoline_code_size = &zynq_secondary_trampoline_end -
+						&zynq_secondary_trampoline;
 
 	/* MS: Expectation that SLCR are directly map and accessible */
 	/* Not possible to jump to non aligned address */
-	if (!(address & 3) && (!address || (address >= 0xC))) {
-		__raw_writel(SLCR_UNLOCK, slcr + 0x8); /* UNLOCK SLCR */
-		__raw_writel(0x22, slcr + 0x244); /* stop CLK and reset CPU1 */
+	if (!(address & 3) && (!address || (address >= trampoline_code_size))) {
+		/* Store pointer to ioremap area which points to address 0x0 */
+		static u8 __iomem *zero;
+		u32 trampoline_size = &zynq_secondary_trampoline_jump -
+						&zynq_secondary_trampoline;
 
-		/*
-		 * This is elegant way how to jump to any address
-		 * 0x0: Load address at 0x8 to r0
-		 * 0x4: Jump by mov instruction
-		 * 0x8: Jumping address
-		 */
+		zynq_slcr_cpu_stop(cpu);
 		if (address) {
-			if (!zero) {
-				printk(KERN_WARNING
-					"BOOTUP jump vectors is not mapped!\n");
-				return -1;
+			if (__pa(PAGE_OFFSET)) {
+				zero = ioremap(0, trampoline_code_size);
+				if (!zero) {
+					pr_warn("BOOTUP jump vectors not accessible\n");
+					return -1;
+				}
+			} else {
+				zero = (__force u8 __iomem *)PAGE_OFFSET;
 			}
-			mem_backup[0] = __raw_readl(zero + 0x0);
-			mem_backup[1] = __raw_readl(zero + 0x4);
-			mem_backup[2] = __raw_readl(zero + 0x8);
-			mem_backup_done = 1;
-			__raw_writel(0xe59f0000, zero + 0x0);/* 0:ldr r0, [8] */
-			__raw_writel(0xe1a0f000, zero + 0x4);/* 4:mov pc, r0 */
-			__raw_writel(address, zero + 0x8);/* 8:.word address */
+
+			/*
+			* This is elegant way how to jump to any address
+			* 0x0: Load address at 0x8 to r0
+			* 0x4: Jump by mov instruction
+			* 0x8: Jumping address
+			*/
+			memcpy((__force void *)zero, &zynq_secondary_trampoline,
+							trampoline_size);
+			writel(address, zero + trampoline_size);
+
+			flush_cache_all();
+			outer_flush_range(0, trampoline_code_size);
+			smp_wmb();
+
+			if (__pa(PAGE_OFFSET))
+				iounmap(zero);
 		}
+		zynq_slcr_cpu_start(cpu);
 
-		flush_cache_all();
-		outer_flush_all();
-		wmb();
-
-		__raw_writel(0x20, slcr + 0x244); /* enable CPU1 */
-		__raw_writel(0x0, slcr + 0x244); /* enable CLK for CPU1 */
-
-		/* the SLCR locking/unlocking needs to be re-done, for now
-		 * there is not centralized locking/unlocking so leave it
-		 * unlocked
-		 */
-#if 0
-		__raw_writel(SLCR_LOCK, slcr + 0x4); /* LOCK SLCR */
-#endif
 		return 0;
 	}
 
-	printk(KERN_WARNING "Can't start CPU1: Wrong starting address %x\n",
-								address);
+	pr_warn("Can't start CPU%d: Wrong starting address %x\n", cpu, address);
 
 	return -1;
 }
-EXPORT_SYMBOL(zynq_cpu1_start);
+EXPORT_SYMBOL(zynq_cpun_start);
 
-int __cpuinit boot_secondary(unsigned int cpu, struct task_struct *idle)
+static int zynq_boot_secondary(unsigned int cpu,
+						struct task_struct *idle)
 {
-	int ret;
-
-	/*
-	 * set synchronisation state between this boot processor
-	 * and the secondary one
-	 */
-	spin_lock(&boot_lock);
-
-	ret = zynq_cpu1_start(virt_to_phys(secondary_startup));
-	if (ret)
-		return -1;
-
-	/*
-	 * now the secondary core is starting up let it run its
-	 * calibrations, then wait for it to finish
-	 */
-	spin_unlock(&boot_lock);
-
-	return 0;
+	return zynq_cpun_start(virt_to_phys(zynq_secondary_startup), cpu);
 }
 
 /*
  * Initialise the CPU possible map early - this describes the CPUs
  * which may be present or become present in the system.
  */
-void __init smp_init_cpus(void)
-{
-	int i, ncores;
-
-	ncores = scu_get_core_count(SCU_PERIPH_BASE);
-
-	for (i = 0; i < ncores; i++)
-		set_cpu_possible(i, true);
-
-	set_smp_cross_call(gic_raise_softirq);
-}
-
-void __init platform_smp_prepare_cpus(unsigned int max_cpus)
+static void __init zynq_smp_init_cpus(void)
 {
 	int i;
 
-	/*
-	 * Remap the first three addresses at zero which are used
-	 * for 32bit long jump for SMP. Look at zynq_cpu1_start()
-	 */
-#if defined(CONFIG_PHYS_OFFSET) && (CONFIG_PHYS_OFFSET != 0)
-	zero = ioremap(0, 12);
-	if (!zero) {
-		printk(KERN_WARNING
-			"!!!! BOOTUP jump vectors can't be used !!!!\n");
-		while (1)
-			;
-	}
-#else
-	/* The first three addresses at zero are already mapped */
-	zero = (u8 *)CONFIG_PAGE_OFFSET;
-#endif
+	ncores = scu_get_core_count(zynq_scu_base);
 
-	/*
-	 * Initialise the present map, which describes the set of CPUs
-	 * actually populated at the present time.
-	 */
-	for (i = 0; i < max_cpus; i++)
-		set_cpu_present(i, true);
-
-	scu_enable(SCU_PERIPH_BASE);
+	for (i = 0; i < ncores && i < CONFIG_NR_CPUS; i++)
+		set_cpu_possible(i, true);
 }
 
+static void __init zynq_smp_prepare_cpus(unsigned int max_cpus)
+{
+	scu_enable(zynq_scu_base);
+}
+
+/*
+ * This function is in the hotplug path. Don't move it into the init section!!
+ */
+static void zynq_secondary_init(unsigned int cpu)
+{
+	zynq_core_pm_init();
+	zynq_prefetch_init();
+}
+
+#ifdef CONFIG_HOTPLUG_CPU
+static int zynq_cpu_kill(unsigned cpu)
+{
+	unsigned long timeout = jiffies + msecs_to_jiffies(50);
+
+	while (zynq_slcr_cpu_state_read(cpu))
+		if (time_after(jiffies, timeout))
+			return 0;
+
+	zynq_slcr_cpu_stop(cpu);
+	return 1;
+}
+
+/**
+ * zynq_cpu_die - platform-specific code to shutdown a CPU
+ * @cpu: cpu number
+ *
+ * Note: Called with IRQs disabled on the dying CPU.
+ */
+static void zynq_cpu_die(unsigned int cpu)
+{
+	zynq_slcr_cpu_state_write(cpu, true);
+	/*
+	 * there is no power-control hardware on this platform, so all
+	 * we can do is put the core into WFI; this is safe as the calling
+	 * code will have already disabled interrupts
+	 */
+	for (;;)
+		cpu_do_idle();
+}
+#endif
+
+struct smp_operations zynq_smp_ops __initdata = {
+	.smp_init_cpus		= zynq_smp_init_cpus,
+	.smp_prepare_cpus	= zynq_smp_prepare_cpus,
+	.smp_boot_secondary	= zynq_boot_secondary,
+	.smp_secondary_init	= zynq_secondary_init,
+#ifdef CONFIG_HOTPLUG_CPU
+	.cpu_die		= zynq_cpu_die,
+	.cpu_kill		= zynq_cpu_kill,
+#endif
+};

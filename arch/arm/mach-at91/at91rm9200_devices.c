@@ -18,11 +18,12 @@
 #include <linux/platform_device.h>
 #include <linux/i2c-gpio.h>
 
-#include <mach/board.h>
 #include <mach/at91rm9200.h>
 #include <mach/at91rm9200_mc.h>
 #include <mach/at91_ramc.h>
+#include <mach/hardware.h>
 
+#include "board.h"
 #include "generic.h"
 
 
@@ -68,7 +69,7 @@ void __init at91_add_device_usbh(struct at91_usbh_data *data)
 
 	/* Enable overcurrent notification */
 	for (i = 0; i < data->ports; i++) {
-		if (data->overcurrent_pin[i])
+		if (gpio_is_valid(data->overcurrent_pin[i]))
 			at91_set_gpio_input(data->overcurrent_pin[i], 1);
 	}
 
@@ -294,9 +295,9 @@ void __init at91_add_device_cf(struct at91_cf_data *data) {}
  *  MMC / SD
  * -------------------------------------------------------------------- */
 
-#if defined(CONFIG_MMC_AT91) || defined(CONFIG_MMC_AT91_MODULE)
+#if IS_ENABLED(CONFIG_MMC_ATMELMCI)
 static u64 mmc_dmamask = DMA_BIT_MASK(32);
-static struct at91_mmc_data mmc_data;
+static struct mci_platform_data mmc_data;
 
 static struct resource mmc_resources[] = {
 	[0] = {
@@ -312,7 +313,7 @@ static struct resource mmc_resources[] = {
 };
 
 static struct platform_device at91rm9200_mmc_device = {
-	.name		= "at91_mci",
+	.name		= "atmel_mci",
 	.id		= -1,
 	.dev		= {
 				.dma_mask		= &mmc_dmamask,
@@ -323,53 +324,69 @@ static struct platform_device at91rm9200_mmc_device = {
 	.num_resources	= ARRAY_SIZE(mmc_resources),
 };
 
-void __init at91_add_device_mmc(short mmc_id, struct at91_mmc_data *data)
+void __init at91_add_device_mci(short mmc_id, struct mci_platform_data *data)
 {
+	unsigned int i;
+	unsigned int slot_count = 0;
+
 	if (!data)
 		return;
 
-	/* input/irq */
-	if (gpio_is_valid(data->det_pin)) {
-		at91_set_gpio_input(data->det_pin, 1);
-		at91_set_deglitch(data->det_pin, 1);
-	}
-	if (gpio_is_valid(data->wp_pin))
-		at91_set_gpio_input(data->wp_pin, 1);
-	if (gpio_is_valid(data->vcc_pin))
-		at91_set_gpio_output(data->vcc_pin, 0);
+	for (i = 0; i < ATMCI_MAX_NR_SLOTS; i++) {
 
-	/* CLK */
-	at91_set_A_periph(AT91_PIN_PA27, 0);
+		if (!data->slot[i].bus_width)
+			continue;
 
-	if (data->slot_b) {
-		/* CMD */
-		at91_set_B_periph(AT91_PIN_PA8, 1);
-
-		/* DAT0, maybe DAT1..DAT3 */
-		at91_set_B_periph(AT91_PIN_PA9, 1);
-		if (data->wire4) {
-			at91_set_B_periph(AT91_PIN_PA10, 1);
-			at91_set_B_periph(AT91_PIN_PA11, 1);
-			at91_set_B_periph(AT91_PIN_PA12, 1);
+		/* input/irq */
+		if (gpio_is_valid(data->slot[i].detect_pin)) {
+			at91_set_gpio_input(data->slot[i].detect_pin, 1);
+			at91_set_deglitch(data->slot[i].detect_pin, 1);
 		}
-	} else {
-		/* CMD */
-		at91_set_A_periph(AT91_PIN_PA28, 1);
+		if (gpio_is_valid(data->slot[i].wp_pin))
+			at91_set_gpio_input(data->slot[i].wp_pin, 1);
 
-		/* DAT0, maybe DAT1..DAT3 */
-		at91_set_A_periph(AT91_PIN_PA29, 1);
-		if (data->wire4) {
-			at91_set_B_periph(AT91_PIN_PB3, 1);
-			at91_set_B_periph(AT91_PIN_PB4, 1);
-			at91_set_B_periph(AT91_PIN_PB5, 1);
+		switch (i) {
+		case 0:					/* slot A */
+			/* CMD */
+			at91_set_A_periph(AT91_PIN_PA28, 1);
+			/* DAT0, maybe DAT1..DAT3 */
+			at91_set_A_periph(AT91_PIN_PA29, 1);
+			if (data->slot[i].bus_width == 4) {
+				at91_set_B_periph(AT91_PIN_PB3, 1);
+				at91_set_B_periph(AT91_PIN_PB4, 1);
+				at91_set_B_periph(AT91_PIN_PB5, 1);
+			}
+			slot_count++;
+			break;
+		case 1:					/* slot B */
+			/* CMD */
+			at91_set_B_periph(AT91_PIN_PA8, 1);
+			/* DAT0, maybe DAT1..DAT3 */
+			at91_set_B_periph(AT91_PIN_PA9, 1);
+			if (data->slot[i].bus_width == 4) {
+				at91_set_B_periph(AT91_PIN_PA10, 1);
+				at91_set_B_periph(AT91_PIN_PA11, 1);
+				at91_set_B_periph(AT91_PIN_PA12, 1);
+			}
+			slot_count++;
+			break;
+		default:
+			printk(KERN_ERR
+			       "AT91: SD/MMC slot %d not available\n", i);
+			break;
+		}
+		if (slot_count) {
+			/* CLK */
+			at91_set_A_periph(AT91_PIN_PA27, 0);
+
+			mmc_data = *data;
+			platform_device_register(&at91rm9200_mmc_device);
 		}
 	}
 
-	mmc_data = *data;
-	platform_device_register(&at91rm9200_mmc_device);
 }
 #else
-void __init at91_add_device_mmc(short mmc_id, struct at91_mmc_data *data) {}
+void __init at91_add_device_mci(short mmc_id, struct mci_platform_data *data) {}
 #endif
 
 
@@ -463,7 +480,7 @@ static struct i2c_gpio_platform_data pdata = {
 
 static struct platform_device at91rm9200_twi_device = {
 	.name			= "i2c-gpio",
-	.id			= -1,
+	.id			= 0,
 	.dev.platform_data	= &pdata,
 };
 
@@ -495,8 +512,8 @@ static struct resource twi_resources[] = {
 };
 
 static struct platform_device at91rm9200_twi_device = {
-	.name		= "at91_i2c",
-	.id		= -1,
+	.name		= "i2c-at91rm9200",
+	.id		= 0,
 	.resource	= twi_resources,
 	.num_resources	= ARRAY_SIZE(twi_resources),
 };
@@ -736,7 +753,7 @@ static struct resource ssc0_resources[] = {
 };
 
 static struct platform_device at91rm9200_ssc0_device = {
-	.name	= "ssc",
+	.name	= "at91rm9200_ssc",
 	.id	= 0,
 	.dev	= {
 		.dma_mask		= &ssc0_dmamask,
@@ -778,7 +795,7 @@ static struct resource ssc1_resources[] = {
 };
 
 static struct platform_device at91rm9200_ssc1_device = {
-	.name	= "ssc",
+	.name	= "at91rm9200_ssc",
 	.id	= 1,
 	.dev	= {
 		.dma_mask		= &ssc1_dmamask,
@@ -820,7 +837,7 @@ static struct resource ssc2_resources[] = {
 };
 
 static struct platform_device at91rm9200_ssc2_device = {
-	.name	= "ssc",
+	.name	= "at91rm9200_ssc",
 	.id	= 2,
 	.dev	= {
 		.dma_mask		= &ssc2_dmamask,
@@ -906,6 +923,7 @@ static struct resource dbgu_resources[] = {
 static struct atmel_uart_data dbgu_data = {
 	.use_dma_tx	= 0,
 	.use_dma_rx	= 0,		/* DBGU not capable of receive DMA */
+	.rts_gpio	= -EINVAL,
 };
 
 static u64 dbgu_dmamask = DMA_BIT_MASK(32);
@@ -944,6 +962,7 @@ static struct resource uart0_resources[] = {
 static struct atmel_uart_data uart0_data = {
 	.use_dma_tx	= 1,
 	.use_dma_rx	= 1,
+	.rts_gpio	= -EINVAL,
 };
 
 static u64 uart0_dmamask = DMA_BIT_MASK(32);
@@ -971,9 +990,10 @@ static inline void configure_usart0_pins(unsigned pins)
 	if (pins & ATMEL_UART_RTS) {
 		/*
 		 * AT91RM9200 Errata #39 - RTS0 is not internally connected to PA21.
-		 *  We need to drive the pin manually.  Default is off (RTS is active low).
+		 * We need to drive the pin manually. The serial driver will driver
+		 * this to high when initializing.
 		 */
-		at91_set_gpio_output(AT91_PIN_PA21, 1);
+		uart0_data.rts_gpio = AT91_PIN_PA21;
 	}
 }
 
@@ -993,6 +1013,7 @@ static struct resource uart1_resources[] = {
 static struct atmel_uart_data uart1_data = {
 	.use_dma_tx	= 1,
 	.use_dma_rx	= 1,
+	.rts_gpio	= -EINVAL,
 };
 
 static u64 uart1_dmamask = DMA_BIT_MASK(32);
@@ -1044,6 +1065,7 @@ static struct resource uart2_resources[] = {
 static struct atmel_uart_data uart2_data = {
 	.use_dma_tx	= 1,
 	.use_dma_rx	= 1,
+	.rts_gpio	= -EINVAL,
 };
 
 static u64 uart2_dmamask = DMA_BIT_MASK(32);
@@ -1087,6 +1109,7 @@ static struct resource uart3_resources[] = {
 static struct atmel_uart_data uart3_data = {
 	.use_dma_tx	= 1,
 	.use_dma_rx	= 1,
+	.rts_gpio	= -EINVAL,
 };
 
 static u64 uart3_dmamask = DMA_BIT_MASK(32);

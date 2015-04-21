@@ -30,7 +30,6 @@
 #include <linux/errno.h>
 #include <linux/freezer.h>
 #include <linux/module.h>
-#include <linux/init.h>
 #include <linux/slab.h>
 #include <linux/mutex.h>
 #include <linux/utsname.h>
@@ -216,7 +215,7 @@ void rts51x_try_to_exit_ss(struct rts51x_chip *chip)
  * a USB port reset, whether from this driver or a different one.
  */
 
-int rts51x_pre_reset(struct usb_interface *iface)
+static int rts51x_pre_reset(struct usb_interface *iface)
 {
 	struct rts51x_chip *chip = usb_get_intfdata(iface);
 
@@ -227,7 +226,7 @@ int rts51x_pre_reset(struct usb_interface *iface)
 	return 0;
 }
 
-int rts51x_post_reset(struct usb_interface *iface)
+static int rts51x_post_reset(struct usb_interface *iface)
 {
 	struct rts51x_chip *chip = usb_get_intfdata(iface);
 
@@ -306,7 +305,7 @@ static int rts51x_control_thread(void *__chip)
 
 		/* we've got a command, let's do it! */
 		else {
-			RTS51X_DEBUG(scsi_show_command(chip->srb));
+			RTS51X_DEBUG(rts51x_scsi_show_command(chip->srb));
 			rts51x_invoke_transport(chip->srb, chip);
 		}
 
@@ -397,7 +396,7 @@ static int rts51x_polling_thread(void *__chip)
 		}
 #endif
 
-		mspro_polling_format_status(chip);
+		rts51x_mspro_polling_format_status(chip);
 
 		/* lock the device pointers */
 		mutex_lock(&(chip->usb->dev_mutex));
@@ -478,7 +477,7 @@ static void rts51x_init_options(struct rts51x_chip *chip)
 {
 	struct rts51x_option *option = &(chip->option);
 
-	option->mspro_formatter_enable = 1;
+	option->rts51x_mspro_formatter_enable = 1;
 
 	option->fpga_sd_sdr104_clk = CLK_100;
 	option->fpga_sd_sdr50_clk = CLK_100;
@@ -510,7 +509,7 @@ static void rts51x_init_options(struct rts51x_chip *chip)
 
 	option->FT2_fast_mode = 0;
 	option->pwr_delay = 800;
-	option->xd_rw_step = 0;
+	option->rts51x_xd_rw_step = 0;
 	option->D3318_off_delay = 50;
 	option->delink_delay = 100;
 	option->rts5129_D3318_off_enable = 0;
@@ -518,7 +517,7 @@ static void rts51x_init_options(struct rts51x_chip *chip)
 	option->reset_or_rw_fail_set_pad_drive = 1;
 	option->debounce_num = 2;
 	option->led_toggle_interval = 6;
-	option->xd_rwn_step = 0;
+	option->rts51x_xd_rwn_step = 0;
 	option->sd_send_status_en = 0;
 	option->sdr50_tx_phase = 0x01;
 	option->sdr50_rx_phase = 0x05;
@@ -833,7 +832,7 @@ static void rts51x_disconnect(struct usb_interface *intf)
  * Initialization and registration
  ***********************************************************************/
 
-struct usb_device_id rts5139_usb_ids[] = {
+static struct usb_device_id rts5139_usb_ids[] = {
 	{USB_DEVICE(0x0BDA, 0x0139)},
 	{USB_DEVICE(0x0BDA, 0x0129)},
 	{}			/* Terminating entry */

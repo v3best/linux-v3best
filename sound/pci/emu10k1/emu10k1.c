@@ -99,8 +99,8 @@ static DEFINE_PCI_DEVICE_TABLE(snd_emu10k1_ids) = {
 
 MODULE_DEVICE_TABLE(pci, snd_emu10k1_ids);
 
-static int __devinit snd_card_emu10k1_probe(struct pci_dev *pci,
-					    const struct pci_device_id *pci_id)
+static int snd_card_emu10k1_probe(struct pci_dev *pci,
+				  const struct pci_device_id *pci_id)
 {
 	static int dev;
 	struct snd_card *card;
@@ -117,7 +117,8 @@ static int __devinit snd_card_emu10k1_probe(struct pci_dev *pci,
 		return -ENOENT;
 	}
 
-	err = snd_card_create(index[dev], id[dev], THIS_MODULE, 0, &card);
+	err = snd_card_new(&pci->dev, index[dev], id[dev], THIS_MODULE,
+			   0, &card);
 	if (err < 0)
 		return err;
 	if (max_buffer_size[dev] < 32)
@@ -169,7 +170,8 @@ static int __devinit snd_card_emu10k1_probe(struct pci_dev *pci,
 	if (snd_seq_device_new(card, 1, SNDRV_SEQ_DEV_ID_EMU10K1_SYNTH,
 			       sizeof(struct snd_emu10k1_synth_arg), &wave) < 0 ||
 	    wave == NULL) {
-		snd_printk(KERN_WARNING "can't initialize Emu10k1 wavetable synth\n");
+		dev_warn(emu->card->dev,
+			 "can't initialize Emu10k1 wavetable synth\n");
 	} else {
 		struct snd_emu10k1_synth_arg *arg;
 		arg = SNDRV_SEQ_DEVICE_ARGPTR(wave);
@@ -199,14 +201,13 @@ static int __devinit snd_card_emu10k1_probe(struct pci_dev *pci,
 	return err;
 }
 
-static void __devexit snd_card_emu10k1_remove(struct pci_dev *pci)
+static void snd_card_emu10k1_remove(struct pci_dev *pci)
 {
 	snd_card_free(pci_get_drvdata(pci));
-	pci_set_drvdata(pci, NULL);
 }
 
 
-#ifdef CONFIG_PM
+#ifdef CONFIG_PM_SLEEP
 static int snd_emu10k1_suspend(struct device *dev)
 {
 	struct pci_dev *pci = to_pci_dev(dev);
@@ -214,6 +215,8 @@ static int snd_emu10k1_suspend(struct device *dev)
 	struct snd_emu10k1 *emu = card->private_data;
 
 	snd_power_change_state(card, SNDRV_CTL_POWER_D3hot);
+
+	emu->suspend = 1;
 
 	snd_pcm_suspend_all(emu->pcm);
 	snd_pcm_suspend_all(emu->pcm_mic);
@@ -245,8 +248,7 @@ static int snd_emu10k1_resume(struct device *dev)
 	pci_set_power_state(pci, PCI_D0);
 	pci_restore_state(pci);
 	if (pci_enable_device(pci) < 0) {
-		printk(KERN_ERR "emu10k1: pci_enable_device failed, "
-		       "disabling device\n");
+		dev_err(dev, "pci_enable_device failed, disabling device\n");
 		snd_card_disconnect(card);
 		return -EIO;
 	}
@@ -260,6 +262,8 @@ static int snd_emu10k1_resume(struct device *dev)
 	if (emu->card_capabilities->ca0151_chip)
 		snd_p16v_resume(emu);
 
+	emu->suspend = 0;
+
 	snd_power_change_state(card, SNDRV_CTL_POWER_D0);
 	return 0;
 }
@@ -268,13 +272,13 @@ static SIMPLE_DEV_PM_OPS(snd_emu10k1_pm, snd_emu10k1_suspend, snd_emu10k1_resume
 #define SND_EMU10K1_PM_OPS	&snd_emu10k1_pm
 #else
 #define SND_EMU10K1_PM_OPS	NULL
-#endif /* CONFIG_PM */
+#endif /* CONFIG_PM_SLEEP */
 
 static struct pci_driver emu10k1_driver = {
 	.name = KBUILD_MODNAME,
 	.id_table = snd_emu10k1_ids,
 	.probe = snd_card_emu10k1_probe,
-	.remove = __devexit_p(snd_card_emu10k1_remove),
+	.remove = snd_card_emu10k1_remove,
 	.driver = {
 		.pm = SND_EMU10K1_PM_OPS,
 	},

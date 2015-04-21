@@ -122,7 +122,6 @@ struct tlv320dac33_priv {
 	unsigned int uthr;
 
 	enum dac33_state state;
-	enum snd_soc_control_type control_type;
 	void *control_data;
 };
 
@@ -461,7 +460,7 @@ static int dac33_set_fifo_mode(struct snd_kcontrol *kcontrol,
 	if (dac33->fifo_mode == ucontrol->value.integer.value[0])
 		return 0;
 	/* Do not allow changes while stream is running*/
-	if (codec->active)
+	if (snd_soc_codec_is_active(codec))
 		return -EPERM;
 
 	if (ucontrol->value.integer.value[0] < 0 ||
@@ -478,9 +477,7 @@ static const char *dac33_fifo_mode_texts[] = {
 	"Bypass", "Mode 1", "Mode 7"
 };
 
-static const struct soc_enum dac33_fifo_mode_enum =
-	SOC_ENUM_SINGLE_EXT(ARRAY_SIZE(dac33_fifo_mode_texts),
-			    dac33_fifo_mode_texts);
+static SOC_ENUM_SINGLE_EXT_DECL(dac33_fifo_mode_enum, dac33_fifo_mode_texts);
 
 /* L/R Line Output Gain */
 static const char *lr_lineout_gain_texts[] = {
@@ -488,15 +485,13 @@ static const char *lr_lineout_gain_texts[] = {
 	"Line 0dB DAC 12dB", "Line 6dB DAC 18dB",
 };
 
-static const struct soc_enum l_lineout_gain_enum =
-	SOC_ENUM_SINGLE(DAC33_LDAC_PWR_CTRL, 0,
-			ARRAY_SIZE(lr_lineout_gain_texts),
-			lr_lineout_gain_texts);
+static SOC_ENUM_SINGLE_DECL(l_lineout_gain_enum,
+			    DAC33_LDAC_PWR_CTRL, 0,
+			    lr_lineout_gain_texts);
 
-static const struct soc_enum r_lineout_gain_enum =
-	SOC_ENUM_SINGLE(DAC33_RDAC_PWR_CTRL, 0,
-			ARRAY_SIZE(lr_lineout_gain_texts),
-			lr_lineout_gain_texts);
+static SOC_ENUM_SINGLE_DECL(r_lineout_gain_enum,
+			    DAC33_RDAC_PWR_CTRL, 0,
+			    lr_lineout_gain_texts);
 
 /*
  * DACL/R digital volume control:
@@ -534,18 +529,16 @@ static const struct snd_kcontrol_new dac33_dapm_abypassr_control =
 /* LOP L/R invert selection */
 static const char *dac33_lr_lom_texts[] = {"DAC", "LOP"};
 
-static const struct soc_enum dac33_left_lom_enum =
-	SOC_ENUM_SINGLE(DAC33_OUT_AMP_CTRL, 3,
-			ARRAY_SIZE(dac33_lr_lom_texts),
-			dac33_lr_lom_texts);
+static SOC_ENUM_SINGLE_DECL(dac33_left_lom_enum,
+			    DAC33_OUT_AMP_CTRL, 3,
+			    dac33_lr_lom_texts);
 
 static const struct snd_kcontrol_new dac33_dapm_left_lom_control =
 SOC_DAPM_ENUM("Route", dac33_left_lom_enum);
 
-static const struct soc_enum dac33_right_lom_enum =
-	SOC_ENUM_SINGLE(DAC33_OUT_AMP_CTRL, 2,
-			ARRAY_SIZE(dac33_lr_lom_texts),
-			dac33_lr_lom_texts);
+static SOC_ENUM_SINGLE_DECL(dac33_right_lom_enum,
+			    DAC33_OUT_AMP_CTRL, 2,
+			    dac33_lr_lom_texts);
 
 static const struct snd_kcontrol_new dac33_dapm_right_lom_control =
 SOC_DAPM_ENUM("Route", dac33_right_lom_enum);
@@ -1452,20 +1445,6 @@ static int dac33_soc_remove(struct snd_soc_codec *codec)
 	return 0;
 }
 
-static int dac33_soc_suspend(struct snd_soc_codec *codec)
-{
-	dac33_set_bias_level(codec, SND_SOC_BIAS_OFF);
-
-	return 0;
-}
-
-static int dac33_soc_resume(struct snd_soc_codec *codec)
-{
-	dac33_set_bias_level(codec, SND_SOC_BIAS_STANDBY);
-
-	return 0;
-}
-
 static struct snd_soc_codec_driver soc_codec_dev_tlv320dac33 = {
 	.read = dac33_read_reg_cache,
 	.write = dac33_write_locked,
@@ -1476,8 +1455,6 @@ static struct snd_soc_codec_driver soc_codec_dev_tlv320dac33 = {
 	.reg_cache_default = dac33_reg,
 	.probe = dac33_soc_probe,
 	.remove = dac33_soc_remove,
-	.suspend = dac33_soc_suspend,
-	.resume = dac33_soc_resume,
 
 	.controls = dac33_snd_controls,
 	.num_controls = ARRAY_SIZE(dac33_snd_controls),
@@ -1514,8 +1491,8 @@ static struct snd_soc_dai_driver dac33_dai = {
 	.ops = &dac33_dai_ops,
 };
 
-static int __devinit dac33_i2c_probe(struct i2c_client *client,
-				     const struct i2c_device_id *id)
+static int dac33_i2c_probe(struct i2c_client *client,
+			   const struct i2c_device_id *id)
 {
 	struct tlv320dac33_platform_data *pdata;
 	struct tlv320dac33_priv *dac33;
@@ -1586,7 +1563,7 @@ err_gpio:
 	return ret;
 }
 
-static int __devexit dac33_i2c_remove(struct i2c_client *client)
+static int dac33_i2c_remove(struct i2c_client *client)
 {
 	struct tlv320dac33_priv *dac33 = i2c_get_clientdata(client);
 
@@ -1617,28 +1594,11 @@ static struct i2c_driver tlv320dac33_i2c_driver = {
 		.owner = THIS_MODULE,
 	},
 	.probe		= dac33_i2c_probe,
-	.remove		= __devexit_p(dac33_i2c_remove),
+	.remove		= dac33_i2c_remove,
 	.id_table	= tlv320dac33_i2c_id,
 };
 
-static int __init dac33_module_init(void)
-{
-	int r;
-	r = i2c_add_driver(&tlv320dac33_i2c_driver);
-	if (r < 0) {
-		printk(KERN_ERR "DAC33: driver registration failed\n");
-		return r;
-	}
-	return 0;
-}
-module_init(dac33_module_init);
-
-static void __exit dac33_module_exit(void)
-{
-	i2c_del_driver(&tlv320dac33_i2c_driver);
-}
-module_exit(dac33_module_exit);
-
+module_i2c_driver(tlv320dac33_i2c_driver);
 
 MODULE_DESCRIPTION("ASoC TLV320DAC33 codec driver");
 MODULE_AUTHOR("Peter Ujfalusi <peter.ujfalusi@ti.com>");

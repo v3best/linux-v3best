@@ -10,8 +10,8 @@
  */
 #include <linux/module.h>
 #include <linux/console.h>
-#include "drmP.h"
-#include "drm.h"
+#include <drm/drmP.h>
+#include <drm/drm_crtc_helper.h>
 
 #include "cirrus_drv.h"
 
@@ -36,12 +36,15 @@ static DEFINE_PCI_DEVICE_TABLE(pciidlist) = {
 };
 
 
-static void cirrus_kick_out_firmware_fb(struct pci_dev *pdev)
+static int cirrus_kick_out_firmware_fb(struct pci_dev *pdev)
 {
 	struct apertures_struct *ap;
 	bool primary = false;
 
 	ap = alloc_apertures(1);
+	if (!ap)
+		return -ENOMEM;
+
 	ap->ranges[0].base = pci_resource_start(pdev, 0);
 	ap->ranges[0].size = pci_resource_len(pdev, 0);
 
@@ -50,12 +53,18 @@ static void cirrus_kick_out_firmware_fb(struct pci_dev *pdev)
 #endif
 	remove_conflicting_framebuffers(ap, "cirrusdrmfb", primary);
 	kfree(ap);
+
+	return 0;
 }
 
-static int __devinit
-cirrus_pci_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
+static int cirrus_pci_probe(struct pci_dev *pdev,
+			    const struct pci_device_id *ent)
 {
-	cirrus_kick_out_firmware_fb(pdev);
+	int ret;
+
+	ret = cirrus_kick_out_firmware_fb(pdev);
+	if (ret)
+		return ret;
 
 	return drm_get_pci_dev(pdev, ent, &driver);
 }
@@ -65,6 +74,41 @@ static void cirrus_pci_remove(struct pci_dev *pdev)
 	struct drm_device *dev = pci_get_drvdata(pdev);
 
 	drm_put_dev(dev);
+}
+
+static int cirrus_pm_suspend(struct device *dev)
+{
+	struct pci_dev *pdev = to_pci_dev(dev);
+	struct drm_device *drm_dev = pci_get_drvdata(pdev);
+	struct cirrus_device *cdev = drm_dev->dev_private;
+
+	drm_kms_helper_poll_disable(drm_dev);
+
+	if (cdev->mode_info.gfbdev) {
+		console_lock();
+		fb_set_suspend(cdev->mode_info.gfbdev->helper.fbdev, 1);
+		console_unlock();
+	}
+
+	return 0;
+}
+
+static int cirrus_pm_resume(struct device *dev)
+{
+	struct pci_dev *pdev = to_pci_dev(dev);
+	struct drm_device *drm_dev = pci_get_drvdata(pdev);
+	struct cirrus_device *cdev = drm_dev->dev_private;
+
+	drm_helper_resume_force_mode(drm_dev);
+
+	if (cdev->mode_info.gfbdev) {
+		console_lock();
+		fb_set_suspend(cdev->mode_info.gfbdev->helper.fbdev, 0);
+		console_unlock();
+	}
+
+	drm_kms_helper_poll_enable(drm_dev);
+	return 0;
 }
 
 static const struct file_operations cirrus_driver_fops = {
@@ -77,10 +121,9 @@ static const struct file_operations cirrus_driver_fops = {
 #ifdef CONFIG_COMPAT
 	.compat_ioctl = drm_compat_ioctl,
 #endif
-	.fasync = drm_fasync,
 };
 static struct drm_driver driver = {
-	.driver_features = DRIVER_MODESET | DRIVER_GEM | DRIVER_USE_MTRR,
+	.driver_features = DRIVER_MODESET | DRIVER_GEM,
 	.load = cirrus_driver_load,
 	.unload = cirrus_driver_unload,
 	.fops = &cirrus_driver_fops,
@@ -90,11 +133,15 @@ static struct drm_driver driver = {
 	.major = DRIVER_MAJOR,
 	.minor = DRIVER_MINOR,
 	.patchlevel = DRIVER_PATCHLEVEL,
-	.gem_init_object = cirrus_gem_init_object,
 	.gem_free_object = cirrus_gem_free_object,
 	.dumb_create = cirrus_dumb_create,
 	.dumb_map_offset = cirrus_dumb_mmap_offset,
-	.dumb_destroy = cirrus_dumb_destroy,
+	.dumb_destroy = drm_gem_dumb_destroy,
+};
+
+static const struct dev_pm_ops cirrus_pm_ops = {
+	SET_SYSTEM_SLEEP_PM_OPS(cirrus_pm_suspend,
+				cirrus_pm_resume)
 };
 
 static struct pci_driver cirrus_pci_driver = {
@@ -102,6 +149,7 @@ static struct pci_driver cirrus_pci_driver = {
 	.id_table = pciidlist,
 	.probe = cirrus_pci_probe,
 	.remove = cirrus_pci_remove,
+	.driver.pm = &cirrus_pm_ops,
 };
 
 static int __init cirrus_init(void)

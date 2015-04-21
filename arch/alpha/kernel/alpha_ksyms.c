@@ -40,6 +40,7 @@ EXPORT_SYMBOL(strrchr);
 EXPORT_SYMBOL(memmove);
 EXPORT_SYMBOL(__memcpy);
 EXPORT_SYMBOL(__memset);
+EXPORT_SYMBOL(___memset);
 EXPORT_SYMBOL(__memsetw);
 EXPORT_SYMBOL(__constant_c_memset);
 EXPORT_SYMBOL(copy_page);
@@ -49,9 +50,6 @@ EXPORT_SYMBOL(alpha_read_fp_reg);
 EXPORT_SYMBOL(alpha_read_fp_reg_s);
 EXPORT_SYMBOL(alpha_write_fp_reg);
 EXPORT_SYMBOL(alpha_write_fp_reg_s);
-
-/* entry.S */
-EXPORT_SYMBOL(kernel_thread);
 
 /* Networking helper routines. */
 EXPORT_SYMBOL(csum_tcpudp_magic);

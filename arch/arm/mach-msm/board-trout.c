@@ -13,6 +13,7 @@
  * GNU General Public License for more details.
  *
  */
+#define pr_fmt(fmt) "%s: " fmt, __func__
 
 #include <linux/kernel.h>
 #include <linux/init.h>
@@ -25,24 +26,24 @@
 #include <asm/mach/map.h>
 #include <asm/setup.h>
 
-#include <mach/board.h>
 #include <mach/hardware.h>
 #include <mach/msm_iomap.h>
 
 #include "devices.h"
 #include "board-trout.h"
+#include "common.h"
 
 extern int trout_init_mmc(unsigned int);
 
 static struct platform_device *devices[] __initdata = {
+	&msm_clock_7x01a,
+	&msm_device_gpio_7201,
 	&msm_device_uart3,
 	&msm_device_smd,
 	&msm_device_nand,
 	&msm_device_hsusb,
 	&msm_device_i2c,
 };
-
-extern struct sys_timer msm_timer;
 
 static void __init trout_init_early(void)
 {
@@ -68,12 +69,11 @@ static void __init trout_init(void)
 
 	platform_add_devices(devices, ARRAY_SIZE(devices));
 
-#ifdef CONFIG_MMC
-        rc = trout_init_mmc(system_rev);
-        if (rc)
-                printk(KERN_CRIT "%s: MMC init failure (%d)\n", __func__, rc);
-#endif
-
+	if (IS_ENABLED(CONFIG_MMC)) {
+		rc = trout_init_mmc(system_rev);
+		if (rc)
+			pr_crit("MMC init failure (%d)\n", rc);
+	}
 }
 
 static struct map_desc trout_io_desc[] __initdata = {
@@ -94,8 +94,6 @@ static void __init trout_map_io(void)
 	/* route UART3 to the "H2W" extended usb connector */
 	writeb(0x80, TROUT_CPLD_BASE + 0x00);
 #endif
-
-	msm_clock_init(msm_clocks_7x01a, msm_num_clocks_7x01a);
 }
 
 static void __init trout_init_late(void)
@@ -111,5 +109,5 @@ MACHINE_START(TROUT, "HTC Dream")
 	.init_irq	= trout_init_irq,
 	.init_machine	= trout_init,
 	.init_late	= trout_init_late,
-	.timer		= &msm_timer,
+	.init_time	= msm7x01_timer_init,
 MACHINE_END

@@ -148,12 +148,13 @@ static int ibnl_rcv_msg(struct sk_buff *skb, struct nlmsghdr *nlh)
 	list_for_each_entry(client, &client_list, list) {
 		if (client->index == index) {
 			if (op < 0 || op >= client->nops ||
-			    !client->cb_table[RDMA_NL_GET_OP(op)].dump)
+			    !client->cb_table[op].dump)
 				return -EINVAL;
 
 			{
 				struct netlink_dump_control c = {
 					.dump = client->cb_table[op].dump,
+					.module = client->cb_table[op].module,
 				};
 				return netlink_dump_start(nls, skb, nlh, &c);
 			}
@@ -177,7 +178,7 @@ int __init ibnl_init(void)
 		.input	= ibnl_rcv,
 	};
 
-	nls = netlink_kernel_create(&init_net, NETLINK_RDMA, THIS_MODULE, &cfg);
+	nls = netlink_kernel_create(&init_net, NETLINK_RDMA, &cfg);
 	if (!nls) {
 		pr_warn("Failed to create netlink socket\n");
 		return -ENOMEM;

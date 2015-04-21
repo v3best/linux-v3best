@@ -3,12 +3,12 @@
  * Written by Martin Mares <mj@atrey.karlin.mff.cuni.cz>
  */
 
-#include <asm/page.h>
 #include <asm-generic/vmlinux.lds.h>
 #include <asm/cache.h>
 #include <asm/thread_info.h>
 #include <asm/memory.h>
-
+#include <asm/page.h>
+	
 #define PROC_INFO							\
 	. = ALIGN(4);							\
 	VMLINUX_SYMBOL(__proc_info_begin) = .;				\
@@ -19,7 +19,11 @@
 	ALIGN_FUNCTION();						\
 	VMLINUX_SYMBOL(__idmap_text_start) = .;				\
 	*(.idmap.text)							\
-	VMLINUX_SYMBOL(__idmap_text_end) = .;
+	VMLINUX_SYMBOL(__idmap_text_end) = .;				\
+	. = ALIGN(32);							\
+	VMLINUX_SYMBOL(__hyp_idmap_text_start) = .;			\
+	*(.hyp.idmap.text)						\
+	VMLINUX_SYMBOL(__hyp_idmap_text_end) = .;
 
 #ifdef CONFIG_HOTPLUG_CPU
 #define ARM_CPU_DISCARD(x)
@@ -39,7 +43,7 @@
 #endif
 
 OUTPUT_ARCH(arm)
-ENTRY(arm_start)
+ENTRY(stext)
 
 #ifndef __ARMEB__
 jiffies = jiffies_64;
@@ -66,10 +70,6 @@ SECTIONS
 		ARM_EXIT_DISCARD(EXIT_TEXT)
 		ARM_EXIT_DISCARD(EXIT_DATA)
 		EXIT_CALL
-#ifndef CONFIG_HOTPLUG
-		*(.ARM.exidx.devexit.text)
-		*(.ARM.extab.devexit.text)
-#endif
 #ifndef CONFIG_MMU
 		*(.fixup)
 		*(__ex_table)
@@ -83,20 +83,14 @@ SECTIONS
 
 #ifdef CONFIG_XIP_KERNEL
 	. = XIP_VIRT_ADDR(CONFIG_XIP_PHYS_ADDR);
-	arm_start = . ;
 #else
 	. = PAGE_OFFSET + TEXT_OFFSET;
-#ifdef CONFIG_PHYS_OFFSET
-	arm_start = CONFIG_PHYS_OFFSET + TEXT_OFFSET;
-#else
-	arm_start = TEXT_OFFSET;
 #endif
-#endif
-	.head.text : AT(ADDR(.head.text) - LOAD_OFFSET) {
+	.head.text : {
 		_text = .;
 		HEAD_TEXT
 	}
-	.text : AT(ADDR(.text) - LOAD_OFFSET){	/* Real text segment	*/
+	.text : {			/* Real text segment		*/
 		_stext = .;		/* Text and read-only data	*/
 			__exception_text_start = .;
 			*(.exception.text)
@@ -120,35 +114,33 @@ SECTIONS
 
 	RO_DATA(PAGE_SIZE)
 
-
-#ifdef CONFIG_ARCH_ZYNQ
-	. = ALIGN (4) ;
-	__fdt_blob : AT(ADDR(__fdt_blob) - LOAD_OFFSET) {
-		_fdt_start = . ;		/* place for fdt blob */
-		*(__fdt_blob) ;			/* Any link-placed DTB */
-	        . = _fdt_start + 0x8000;	/* Pad up to 16kbyte */
-		_fdt_end = . ;
-	}
+	. = ALIGN(4);
+	__ex_table : AT(ADDR(__ex_table) - LOAD_OFFSET) {
+		__start___ex_table = .;
+#ifdef CONFIG_MMU
+		*(__ex_table)
 #endif
-
-
+		__stop___ex_table = .;
+	}
 
 #ifdef CONFIG_ARM_UNWIND
 	/*
 	 * Stack unwinding tables
 	 */
 	. = ALIGN(8);
-	.ARM.unwind_idx : AT(ADDR(.ARM.unwind_idx) - LOAD_OFFSET) {
+	.ARM.unwind_idx : {
 		__start_unwind_idx = .;
 		*(.ARM.exidx*)
 		__stop_unwind_idx = .;
 	}
-	.ARM.unwind_tab : AT(ADDR(.ARM.unwind_tab) - LOAD_OFFSET) {
+	.ARM.unwind_tab : {
 		__start_unwind_tab = .;
 		*(.ARM.extab*)
 		__stop_unwind_tab = .;
 	}
 #endif
+
+	NOTES
 
 	_etext = .;			/* End of text and rodata section */
 
@@ -156,37 +148,54 @@ SECTIONS
 	. = ALIGN(PAGE_SIZE);
 	__init_begin = .;
 #endif
+	/*
+	 * The vectors and stubs are relocatable code, and the
+	 * only thing that matters is their relative offsets
+	 */
+	__vectors_start = .;
+	.vectors 0 : AT(__vectors_start) {
+		*(.vectors)
+	}
+	. = __vectors_start + SIZEOF(.vectors);
+	__vectors_end = .;
+
+	__stubs_start = .;
+	.stubs 0x1000 : AT(__stubs_start) {
+		*(.stubs)
+	}
+	. = __stubs_start + SIZEOF(.stubs);
+	__stubs_end = .;
 
 	INIT_TEXT_SECTION(8)
-	.exit.text : AT(ADDR(.exit.text) - LOAD_OFFSET) {
+	.exit.text : {
 		ARM_EXIT_KEEP(EXIT_TEXT)
 	}
-	.init.proc.info : AT(ADDR(.init.proc.info) - LOAD_OFFSET) {
+	.init.proc.info : {
 		ARM_CPU_DISCARD(PROC_INFO)
 	}
-	.init.arch.info : AT(ADDR(.init.arch.info) - LOAD_OFFSET) {
+	.init.arch.info : {
 		__arch_info_begin = .;
 		*(.arch.info.init)
 		__arch_info_end = .;
 	}
-	.init.tagtable : AT(ADDR(.init.tagtable) - LOAD_OFFSET) {
+	.init.tagtable : {
 		__tagtable_begin = .;
 		*(.taglist.init)
 		__tagtable_end = .;
 	}
 #ifdef CONFIG_SMP_ON_UP
-	.init.smpalt : AT(ADDR(.init.smpalt) - LOAD_OFFSET) {
+	.init.smpalt : {
 		__smpalt_begin = .;
 		*(.alt.smp.init)
 		__smpalt_end = .;
 	}
 #endif
-	.init.pv_table : AT(ADDR(.init.pv_table) - LOAD_OFFSET) {
+	.init.pv_table : {
 		__pv_table_begin = .;
 		*(.pv_table)
 		__pv_table_end = .;
 	}
-	.init.data : AT(ADDR(.init.data) - LOAD_OFFSET) {
+	.init.data : {
 #ifndef CONFIG_XIP_KERNEL
 		INIT_DATA
 #endif
@@ -197,7 +206,7 @@ SECTIONS
 		INIT_RAM_FS
 	}
 #ifndef CONFIG_XIP_KERNEL
-	.exit.data : AT(ADDR(.exit.data) - LOAD_OFFSET) {
+	.exit.data : {
 		ARM_EXIT_KEEP(EXIT_DATA)
 	}
 #endif
@@ -215,7 +224,7 @@ SECTIONS
 	__data_loc = .;
 #endif
 
-	.data : AT(ADDR(.data) - LOAD_OFFSET) {
+	.data : AT(__data_loc) {
 		_data = .;		/* address in memory */
 		_sdata = .;
 
@@ -237,16 +246,6 @@ SECTIONS
 		NOSAVE_DATA
 		CACHELINE_ALIGNED_DATA(L1_CACHE_BYTES)
 		READ_MOSTLY_DATA(L1_CACHE_BYTES)
-
-		/*
-		 * The exception fixup table (might need resorting at runtime)
-		 */
-		. = ALIGN(4);
-		__start___ex_table = .;
-#ifdef CONFIG_MMU
-		*(__ex_table)
-#endif
-		__stop___ex_table = .;
 
 		/*
 		 * and the usual data section
@@ -315,8 +314,6 @@ SECTIONS
 	}
 #endif
 
-	NOTES
-
 	BSS_SECTION(0, 0, 0)
 	_end = .;
 
@@ -331,3 +328,8 @@ SECTIONS
  */
 ASSERT((__proc_info_end - __proc_info_begin), "missing CPU support")
 ASSERT((__arch_info_end - __arch_info_begin), "no machine record defined")
+/*
+ * The HYP init code can't be more than a page long.
+ * The above comment applies as well.
+ */
+ASSERT(((__hyp_idmap_text_end - __hyp_idmap_text_start) <= PAGE_SIZE), "HYP init code too big")

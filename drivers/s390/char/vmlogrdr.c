@@ -313,7 +313,7 @@ static int vmlogrdr_open (struct inode *inode, struct file *filp)
 	int ret;
 
 	dev_num = iminor(inode);
-	if (dev_num > MAXMINOR)
+	if (dev_num >= MAXMINOR)
 		return -ENODEV;
 	logptr = &sys_ser[dev_num];
 
@@ -321,7 +321,7 @@ static int vmlogrdr_open (struct inode *inode, struct file *filp)
 	 * only allow for blocking reads to be open
 	 */
 	if (filp->f_flags & O_NONBLOCK)
-		return -ENOSYS;
+		return -EOPNOTSUPP;
 
 	/* Besure this device hasn't already been opened */
 	spin_lock_bh(&logptr->priv_lock);

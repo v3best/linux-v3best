@@ -30,11 +30,17 @@
 #include <linux/io.h>
 #include <linux/platform_device.h>
 #include <linux/clk.h>
+#include <linux/of.h>
+#include <linux/of_device.h>
 
 #include <linux/can/dev.h>
 
 #include "c_can.h"
 
+#define CAN_RAMINIT_START_MASK(i)	(0x001 << (i))
+#define CAN_RAMINIT_DONE_MASK(i)	(0x100 << (i))
+#define CAN_RAMINIT_ALL_MASK(i)		(0x101 << (i))
+static DEFINE_SPINLOCK(raminit_lock);
 /*
  * 16-bit c_can registers can be arranged differently in the memory
  * architecture of different implementations. For example: 16-bit
@@ -65,16 +71,90 @@ static void c_can_plat_write_reg_aligned_to_32bit(struct c_can_priv *priv,
 	writew(val, priv->base + 2 * priv->regs[index]);
 }
 
-static int __devinit c_can_plat_probe(struct platform_device *pdev)
+static void c_can_hw_raminit_wait(const struct c_can_priv *priv, u32 mask,
+				  u32 val)
+{
+	/* We look only at the bits of our instance. */
+	val &= mask;
+	while ((readl(priv->raminit_ctrlreg) & mask) != val)
+		udelay(1);
+}
+
+static void c_can_hw_raminit(const struct c_can_priv *priv, bool enable)
+{
+	u32 mask = CAN_RAMINIT_ALL_MASK(priv->instance);
+	u32 ctrl;
+
+	spin_lock(&raminit_lock);
+
+	ctrl = readl(priv->raminit_ctrlreg);
+	/* We clear the done and start bit first. The start bit is
+	 * looking at the 0 -> transition, but is not self clearing;
+	 * And we clear the init done bit as well.
+	 */
+	ctrl &= ~CAN_RAMINIT_START_MASK(priv->instance);
+	ctrl |= CAN_RAMINIT_DONE_MASK(priv->instance);
+	writel(ctrl, priv->raminit_ctrlreg);
+	ctrl &= ~CAN_RAMINIT_DONE_MASK(priv->instance);
+	c_can_hw_raminit_wait(priv, ctrl, mask);
+
+	if (enable) {
+		/* Set start bit and wait for the done bit. */
+		ctrl |= CAN_RAMINIT_START_MASK(priv->instance);
+		writel(ctrl, priv->raminit_ctrlreg);
+		ctrl |= CAN_RAMINIT_DONE_MASK(priv->instance);
+		c_can_hw_raminit_wait(priv, ctrl, mask);
+	}
+	spin_unlock(&raminit_lock);
+}
+
+static struct platform_device_id c_can_id_table[] = {
+	[BOSCH_C_CAN_PLATFORM] = {
+		.name = KBUILD_MODNAME,
+		.driver_data = BOSCH_C_CAN,
+	},
+	[BOSCH_C_CAN] = {
+		.name = "c_can",
+		.driver_data = BOSCH_C_CAN,
+	},
+	[BOSCH_D_CAN] = {
+		.name = "d_can",
+		.driver_data = BOSCH_D_CAN,
+	}, {
+	}
+};
+MODULE_DEVICE_TABLE(platform, c_can_id_table);
+
+static const struct of_device_id c_can_of_table[] = {
+	{ .compatible = "bosch,c_can", .data = &c_can_id_table[BOSCH_C_CAN] },
+	{ .compatible = "bosch,d_can", .data = &c_can_id_table[BOSCH_D_CAN] },
+	{ /* sentinel */ },
+};
+MODULE_DEVICE_TABLE(of, c_can_of_table);
+
+static int c_can_plat_probe(struct platform_device *pdev)
 {
 	int ret;
 	void __iomem *addr;
 	struct net_device *dev;
 	struct c_can_priv *priv;
+	const struct of_device_id *match;
 	const struct platform_device_id *id;
-	struct resource *mem;
+	struct resource *mem, *res;
 	int irq;
 	struct clk *clk;
+
+	if (pdev->dev.of_node) {
+		match = of_match_device(c_can_of_table, &pdev->dev);
+		if (!match) {
+			dev_err(&pdev->dev, "Failed to find matching dt id\n");
+			ret = -EINVAL;
+			goto exit;
+		}
+		id = match->data;
+	} else {
+		id = platform_get_device_id(pdev);
+	}
 
 	/* get the appropriate clk */
 	clk = clk_get(&pdev->dev, NULL);
@@ -114,9 +194,8 @@ static int __devinit c_can_plat_probe(struct platform_device *pdev)
 	}
 
 	priv = netdev_priv(dev);
-	id = platform_get_device_id(pdev);
 	switch (id->driver_data) {
-	case C_CAN_DEVTYPE:
+	case BOSCH_C_CAN:
 		priv->regs = reg_map_c_can;
 		switch (mem->flags & IORESOURCE_MEM_TYPE_MASK) {
 		case IORESOURCE_MEM_32BIT:
@@ -130,11 +209,23 @@ static int __devinit c_can_plat_probe(struct platform_device *pdev)
 			break;
 		}
 		break;
-	case D_CAN_DEVTYPE:
+	case BOSCH_D_CAN:
 		priv->regs = reg_map_d_can;
 		priv->can.ctrlmode_supported |= CAN_CTRLMODE_3_SAMPLES;
 		priv->read_reg = c_can_plat_read_reg_aligned_to_16bit;
 		priv->write_reg = c_can_plat_write_reg_aligned_to_16bit;
+
+		if (pdev->dev.of_node)
+			priv->instance = of_alias_get_id(pdev->dev.of_node, "d_can");
+		else
+			priv->instance = pdev->id;
+
+		res = platform_get_resource(pdev, IORESOURCE_MEM, 1);
+		priv->raminit_ctrlreg = devm_ioremap_resource(&pdev->dev, res);
+		if (IS_ERR(priv->raminit_ctrlreg) || priv->instance < 0)
+			dev_info(&pdev->dev, "control memory is not used for raminit\n");
+		else
+			priv->raminit = c_can_hw_raminit;
 		break;
 	default:
 		ret = -EINVAL;
@@ -143,8 +234,10 @@ static int __devinit c_can_plat_probe(struct platform_device *pdev)
 
 	dev->irq = irq;
 	priv->base = addr;
+	priv->device = &pdev->dev;
 	priv->can.clock.freq = clk_get_rate(clk);
 	priv->priv = clk;
+	priv->type = id->driver_data;
 
 	platform_set_drvdata(pdev, dev);
 	SET_NETDEV_DEV(dev, &pdev->dev);
@@ -161,7 +254,6 @@ static int __devinit c_can_plat_probe(struct platform_device *pdev)
 	return 0;
 
 exit_free_device:
-	platform_set_drvdata(pdev, NULL);
 	free_c_can_dev(dev);
 exit_iounmap:
 	iounmap(addr);
@@ -175,14 +267,13 @@ exit:
 	return ret;
 }
 
-static int __devexit c_can_plat_remove(struct platform_device *pdev)
+static int c_can_plat_remove(struct platform_device *pdev)
 {
 	struct net_device *dev = platform_get_drvdata(pdev);
 	struct c_can_priv *priv = netdev_priv(dev);
 	struct resource *mem;
 
 	unregister_c_can_dev(dev);
-	platform_set_drvdata(pdev, NULL);
 
 	free_c_can_dev(dev);
 	iounmap(priv->base);
@@ -195,27 +286,75 @@ static int __devexit c_can_plat_remove(struct platform_device *pdev)
 	return 0;
 }
 
-static const struct platform_device_id c_can_id_table[] = {
-	{
-		.name = KBUILD_MODNAME,
-		.driver_data = C_CAN_DEVTYPE,
-	}, {
-		.name = "c_can",
-		.driver_data = C_CAN_DEVTYPE,
-	}, {
-		.name = "d_can",
-		.driver_data = D_CAN_DEVTYPE,
-	}, {
+#ifdef CONFIG_PM
+static int c_can_suspend(struct platform_device *pdev, pm_message_t state)
+{
+	int ret;
+	struct net_device *ndev = platform_get_drvdata(pdev);
+	struct c_can_priv *priv = netdev_priv(ndev);
+
+	if (priv->type != BOSCH_D_CAN) {
+		dev_warn(&pdev->dev, "Not supported\n");
+		return 0;
 	}
-};
+
+	if (netif_running(ndev)) {
+		netif_stop_queue(ndev);
+		netif_device_detach(ndev);
+	}
+
+	ret = c_can_power_down(ndev);
+	if (ret) {
+		netdev_err(ndev, "failed to enter power down mode\n");
+		return ret;
+	}
+
+	priv->can.state = CAN_STATE_SLEEPING;
+
+	return 0;
+}
+
+static int c_can_resume(struct platform_device *pdev)
+{
+	int ret;
+	struct net_device *ndev = platform_get_drvdata(pdev);
+	struct c_can_priv *priv = netdev_priv(ndev);
+
+	if (priv->type != BOSCH_D_CAN) {
+		dev_warn(&pdev->dev, "Not supported\n");
+		return 0;
+	}
+
+	ret = c_can_power_up(ndev);
+	if (ret) {
+		netdev_err(ndev, "Still in power down mode\n");
+		return ret;
+	}
+
+	priv->can.state = CAN_STATE_ERROR_ACTIVE;
+
+	if (netif_running(ndev)) {
+		netif_device_attach(ndev);
+		netif_start_queue(ndev);
+	}
+
+	return 0;
+}
+#else
+#define c_can_suspend NULL
+#define c_can_resume NULL
+#endif
 
 static struct platform_driver c_can_plat_driver = {
 	.driver = {
 		.name = KBUILD_MODNAME,
 		.owner = THIS_MODULE,
+		.of_match_table = c_can_of_table,
 	},
 	.probe = c_can_plat_probe,
-	.remove = __devexit_p(c_can_plat_remove),
+	.remove = c_can_plat_remove,
+	.suspend = c_can_suspend,
+	.resume = c_can_resume,
 	.id_table = c_can_id_table,
 };
 

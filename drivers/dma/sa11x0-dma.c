@@ -113,11 +113,9 @@ struct sa11x0_dma_phy {
 	struct sa11x0_dma_desc	*txd_load;
 	unsigned		sg_done;
 	struct sa11x0_dma_desc	*txd_done;
-#ifdef CONFIG_PM_SLEEP
 	u32			dbs[2];
 	u32			dbt[2];
 	u32			dcsr;
-#endif
 };
 
 struct sa11x0_dma_dev {
@@ -436,7 +434,7 @@ static enum dma_status sa11x0_dma_tx_status(struct dma_chan *chan,
 	enum dma_status ret;
 
 	ret = dma_cookie_status(&c->vc.chan, cookie, state);
-	if (ret == DMA_SUCCESS)
+	if (ret == DMA_COMPLETE)
 		return ret;
 
 	if (!state)
@@ -614,7 +612,7 @@ static struct dma_async_tx_descriptor *sa11x0_dma_prep_slave_sg(
 
 static struct dma_async_tx_descriptor *sa11x0_dma_prep_dma_cyclic(
 	struct dma_chan *chan, dma_addr_t addr, size_t size, size_t period,
-	enum dma_transfer_direction dir, void *context)
+	enum dma_transfer_direction dir, unsigned long flags, void *context)
 {
 	struct sa11x0_dma_chan *c = to_sa11x0_dma_chan(chan);
 	struct sa11x0_dma_desc *txd;
@@ -826,7 +824,7 @@ static const struct sa11x0_dma_channel_desc chan_desc[] = {
 	CD(Ser4SSPRc, DDAR_RW),
 };
 
-static int __devinit sa11x0_dma_init_dmadev(struct dma_device *dmadev,
+static int sa11x0_dma_init_dmadev(struct dma_device *dmadev,
 	struct device *dev)
 {
 	unsigned i;
@@ -891,7 +889,7 @@ static void sa11x0_dma_free_channels(struct dma_device *dmadev)
 	}
 }
 
-static int __devinit sa11x0_dma_probe(struct platform_device *pdev)
+static int sa11x0_dma_probe(struct platform_device *pdev)
 {
 	struct sa11x0_dma_dev *d;
 	struct resource *res;
@@ -967,7 +965,7 @@ static int __devinit sa11x0_dma_probe(struct platform_device *pdev)
 	return ret;
 }
 
-static int __devexit sa11x0_dma_remove(struct platform_device *pdev)
+static int sa11x0_dma_remove(struct platform_device *pdev)
 {
 	struct sa11x0_dma_dev *d = platform_get_drvdata(pdev);
 	unsigned pch;
@@ -984,7 +982,6 @@ static int __devexit sa11x0_dma_remove(struct platform_device *pdev)
 	return 0;
 }
 
-#ifdef CONFIG_PM_SLEEP
 static int sa11x0_dma_suspend(struct device *dev)
 {
 	struct sa11x0_dma_dev *d = dev_get_drvdata(dev);
@@ -1054,7 +1051,6 @@ static int sa11x0_dma_resume(struct device *dev)
 
 	return 0;
 }
-#endif
 
 static const struct dev_pm_ops sa11x0_dma_pm_ops = {
 	.suspend_noirq = sa11x0_dma_suspend,
@@ -1072,7 +1068,7 @@ static struct platform_driver sa11x0_dma_driver = {
 		.pm	= &sa11x0_dma_pm_ops,
 	},
 	.probe		= sa11x0_dma_probe,
-	.remove		= __devexit_p(sa11x0_dma_remove),
+	.remove		= sa11x0_dma_remove,
 };
 
 bool sa11x0_dma_filter_fn(struct dma_chan *chan, void *param)

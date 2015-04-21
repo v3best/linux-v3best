@@ -14,7 +14,6 @@
 #include <linux/pci.h>
 #include <asm/vio.h>
 #include <asm/bug.h>
-#include <asm/abs_addr.h>
 #include <asm/machdep.h>
 
 /*
@@ -50,7 +49,7 @@ void *dma_direct_alloc_coherent(struct device *dev, size_t size,
 		return NULL;
 	ret = page_address(page);
 	memset(ret, 0, size);
-	*dma_handle = virt_to_abs(ret) + get_dma_offset(dev);
+	*dma_handle = __pa(ret) + get_dma_offset(dev);
 
 	return ret;
 #endif
@@ -192,18 +191,22 @@ EXPORT_SYMBOL(dma_direct_ops);
 
 #define PREALLOC_DMA_DEBUG_ENTRIES (1 << 16)
 
-int dma_set_mask(struct device *dev, u64 dma_mask)
+int __dma_set_mask(struct device *dev, u64 dma_mask)
 {
 	struct dma_map_ops *dma_ops = get_dma_ops(dev);
 
-	if (ppc_md.dma_set_mask)
-		return ppc_md.dma_set_mask(dev, dma_mask);
 	if ((dma_ops != NULL) && (dma_ops->set_dma_mask != NULL))
 		return dma_ops->set_dma_mask(dev, dma_mask);
 	if (!dev->dma_mask || !dma_supported(dev, dma_mask))
 		return -EIO;
 	*dev->dma_mask = dma_mask;
 	return 0;
+}
+int dma_set_mask(struct device *dev, u64 dma_mask)
+{
+	if (ppc_md.dma_set_mask)
+		return ppc_md.dma_set_mask(dev, dma_mask);
+	return __dma_set_mask(dev, dma_mask);
 }
 EXPORT_SYMBOL(dma_set_mask);
 

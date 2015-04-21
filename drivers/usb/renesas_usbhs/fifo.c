@@ -32,7 +32,6 @@
  */
 void usbhs_pkt_init(struct usbhs_pkt *pkt)
 {
-	pkt->dma = DMA_ADDR_INVALID;
 	INIT_LIST_HEAD(&pkt->node);
 }
 
@@ -163,7 +162,7 @@ static int usbhsf_pkt_handler(struct usbhs_pipe *pipe, int type)
 		func = pkt->handler->dma_done;
 		break;
 	default:
-		dev_err(dev, "unknown pkt hander\n");
+		dev_err(dev, "unknown pkt handler\n");
 		goto __usbhs_pkt_handler_end;
 	}
 
@@ -192,8 +191,8 @@ void usbhs_pkt_start(struct usbhs_pipe *pipe)
 /*
  *		irq enable/disable function
  */
-#define usbhsf_irq_empty_ctrl(p, e) usbhsf_irq_callback_ctrl(p, bempsts, e)
-#define usbhsf_irq_ready_ctrl(p, e) usbhsf_irq_callback_ctrl(p, brdysts, e)
+#define usbhsf_irq_empty_ctrl(p, e) usbhsf_irq_callback_ctrl(p, irq_bempsts, e)
+#define usbhsf_irq_ready_ctrl(p, e) usbhsf_irq_callback_ctrl(p, irq_brdysts, e)
 #define usbhsf_irq_callback_ctrl(pipe, status, enable)			\
 	({								\
 		struct usbhs_priv *priv = usbhs_pipe_to_priv(pipe);	\
@@ -202,9 +201,9 @@ void usbhs_pkt_start(struct usbhs_pipe *pipe)
 		if (!mod)						\
 			return;						\
 		if (enable)						\
-			mod->irq_##status |= status;			\
+			mod->status |= status;				\
 		else							\
-			mod->irq_##status &= ~status;			\
+			mod->status &= ~status;				\
 		usbhs_irq_callback_update(priv, mod);			\
 	})
 
@@ -488,6 +487,8 @@ static int usbhsf_pio_try_push(struct usbhs_pkt *pkt, int *is_done)
 	usbhs_pipe_data_sequence(pipe, pkt->sequence);
 	pkt->sequence = -1; /* -1 sequence will be ignored */
 
+	usbhs_pipe_set_trans_count_if_bulk(pipe, pkt->length);
+
 	ret = usbhsf_fifo_select(pipe, fifo, 1);
 	if (ret < 0)
 		return 0;
@@ -594,6 +595,7 @@ static int usbhsf_prepare_pop(struct usbhs_pkt *pkt, int *is_done)
 	usbhs_pipe_data_sequence(pipe, pkt->sequence);
 	pkt->sequence = -1; /* -1 sequence will be ignored */
 
+	usbhs_pipe_set_trans_count_if_bulk(pipe, pkt->length);
 	usbhs_pipe_enable(pipe);
 	usbhsf_rx_irq_ctrl(pipe, 1);
 
@@ -795,6 +797,8 @@ static void xfer_work(struct work_struct *work)
 	dev_dbg(dev, "  %s %d (%d/ %d)\n",
 		fifo->name, usbhs_pipe_number(pipe), pkt->length, pkt->zero);
 
+	usbhs_pipe_set_trans_count_if_bulk(pipe, pkt->trans);
+	usbhs_pipe_enable(pipe);
 	usbhsf_dma_start(pipe, fifo);
 	dma_async_issue_pending(chan);
 }
@@ -1120,19 +1124,8 @@ void usbhs_fifo_init(struct usbhs_priv *priv)
 	mod->irq_brdysts	= 0;
 
 	cfifo->pipe	= NULL;
-	cfifo->tx_chan	= NULL;
-	cfifo->rx_chan	= NULL;
-
 	d0fifo->pipe	= NULL;
-	d0fifo->tx_chan	= NULL;
-	d0fifo->rx_chan	= NULL;
-
 	d1fifo->pipe	= NULL;
-	d1fifo->tx_chan	= NULL;
-	d1fifo->rx_chan	= NULL;
-
-	usbhsf_dma_init(priv, usbhsf_get_d0fifo(priv));
-	usbhsf_dma_init(priv, usbhsf_get_d1fifo(priv));
 }
 
 void usbhs_fifo_quit(struct usbhs_priv *priv)
@@ -1143,9 +1136,6 @@ void usbhs_fifo_quit(struct usbhs_priv *priv)
 	mod->irq_ready		= NULL;
 	mod->irq_bempsts	= 0;
 	mod->irq_brdysts	= 0;
-
-	usbhsf_dma_quit(priv, usbhsf_get_d0fifo(priv));
-	usbhsf_dma_quit(priv, usbhsf_get_d1fifo(priv));
 }
 
 int usbhs_fifo_probe(struct usbhs_priv *priv)
@@ -1167,6 +1157,7 @@ int usbhs_fifo_probe(struct usbhs_priv *priv)
 	fifo->ctr	= D0FIFOCTR;
 	fifo->tx_slave.shdma_slave.slave_id	= usbhs_get_dparam(priv, d0_tx_id);
 	fifo->rx_slave.shdma_slave.slave_id	= usbhs_get_dparam(priv, d0_rx_id);
+	usbhsf_dma_init(priv, fifo);
 
 	/* D1FIFO */
 	fifo = usbhsf_get_d1fifo(priv);
@@ -1176,10 +1167,13 @@ int usbhs_fifo_probe(struct usbhs_priv *priv)
 	fifo->ctr	= D1FIFOCTR;
 	fifo->tx_slave.shdma_slave.slave_id	= usbhs_get_dparam(priv, d1_tx_id);
 	fifo->rx_slave.shdma_slave.slave_id	= usbhs_get_dparam(priv, d1_rx_id);
+	usbhsf_dma_init(priv, fifo);
 
 	return 0;
 }
 
 void usbhs_fifo_remove(struct usbhs_priv *priv)
 {
+	usbhsf_dma_quit(priv, usbhsf_get_d0fifo(priv));
+	usbhsf_dma_quit(priv, usbhsf_get_d1fifo(priv));
 }

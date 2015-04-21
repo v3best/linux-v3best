@@ -74,14 +74,9 @@ static void poodle_ext_control(struct snd_soc_dapm_context *dapm)
 static int poodle_startup(struct snd_pcm_substream *substream)
 {
 	struct snd_soc_pcm_runtime *rtd = substream->private_data;
-	struct snd_soc_codec *codec = rtd->codec;
-
-	mutex_lock(&codec->mutex);
 
 	/* check the jack status at stream startup */
-	poodle_ext_control(&codec->dapm);
-
-	mutex_unlock(&codec->mutex);
+	poodle_ext_control(&rtd->card->dapm);
 
 	return 0;
 }
@@ -269,7 +264,7 @@ static struct snd_soc_card poodle = {
 	.num_dapm_routes = ARRAY_SIZE(poodle_audio_map),
 };
 
-static int __devinit poodle_probe(struct platform_device *pdev)
+static int poodle_probe(struct platform_device *pdev)
 {
 	struct snd_soc_card *card = &poodle;
 	int ret;
@@ -291,7 +286,7 @@ static int __devinit poodle_probe(struct platform_device *pdev)
 	return ret;
 }
 
-static int __devexit poodle_remove(struct platform_device *pdev)
+static int poodle_remove(struct platform_device *pdev)
 {
 	struct snd_soc_card *card = platform_get_drvdata(pdev);
 
@@ -303,9 +298,10 @@ static struct platform_driver poodle_driver = {
 	.driver		= {
 		.name	= "poodle-audio",
 		.owner	= THIS_MODULE,
+		.pm     = &snd_soc_pm_ops,
 	},
 	.probe		= poodle_probe,
-	.remove		= __devexit_p(poodle_remove),
+	.remove		= poodle_remove,
 };
 
 module_platform_driver(poodle_driver);

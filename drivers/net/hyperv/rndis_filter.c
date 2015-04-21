@@ -11,8 +11,7 @@
  * more details.
  *
  * You should have received a copy of the GNU General Public License along with
- * this program; if not, write to the Free Software Foundation, Inc., 59 Temple
- * Place - Suite 330, Boston, MA 02111-1307 USA.
+ * this program; if not, see <http://www.gnu.org/licenses/>.
  *
  * Authors:
  *   Haiyang Zhang <haiyangz@microsoft.com>
@@ -32,30 +31,32 @@
 #include "hyperv_net.h"
 
 
+#define RNDIS_EXT_LEN 100
 struct rndis_request {
 	struct list_head list_ent;
 	struct completion  wait_event;
 
-	/*
-	 * FIXME: We assumed a fixed size response here. If we do ever need to
-	 * handle a bigger response, we can either define a max response
-	 * message or add a response buffer variable above this field
-	 */
 	struct rndis_message response_msg;
+	/*
+	 * The buffer for extended info after the RNDIS response message. It's
+	 * referenced based on the data offset in the RNDIS message. Its size
+	 * is enough for current needs, and should be sufficient for the near
+	 * future.
+	 */
+	u8 response_ext[RNDIS_EXT_LEN];
 
 	/* Simplify allocation by having a netvsc packet inline */
 	struct hv_netvsc_packet	pkt;
-	struct hv_page_buffer buf;
-	/* FIXME: We assumed a fixed size request here. */
+	/* Set 2 pages for rndis requests crossing page boundary */
+	struct hv_page_buffer buf[2];
+
 	struct rndis_message request_msg;
-	u8 ext[100];
+	/*
+	 * The buffer for the extended info after the RNDIS request message.
+	 * It is referenced and sized in a similar way as response_ext.
+	 */
+	u8 request_ext[RNDIS_EXT_LEN];
 };
-
-static void rndis_filter_send_completion(void *ctx);
-
-static void rndis_filter_send_request_completion(void *ctx);
-
-
 
 static struct rndis_device *get_rndis_device(void)
 {
@@ -221,13 +222,38 @@ static int rndis_filter_send_request(struct rndis_device *dev,
 	packet->page_buf[0].offset =
 		(unsigned long)&req->request_msg & (PAGE_SIZE - 1);
 
-	packet->completion.send.send_completion_ctx = req;/* packet; */
-	packet->completion.send.send_completion =
-		rndis_filter_send_request_completion;
-	packet->completion.send.send_completion_tid = (unsigned long)dev;
+	/* Add one page_buf when request_msg crossing page boundary */
+	if (packet->page_buf[0].offset + packet->page_buf[0].len > PAGE_SIZE) {
+		packet->page_buf_cnt++;
+		packet->page_buf[0].len = PAGE_SIZE -
+			packet->page_buf[0].offset;
+		packet->page_buf[1].pfn = virt_to_phys((void *)&req->request_msg
+			+ packet->page_buf[0].len) >> PAGE_SHIFT;
+		packet->page_buf[1].offset = 0;
+		packet->page_buf[1].len = req->request_msg.msg_len -
+			packet->page_buf[0].len;
+	}
+
+	packet->completion.send.send_completion = NULL;
 
 	ret = netvsc_send(dev->net_dev->dev, packet);
 	return ret;
+}
+
+static void rndis_set_link_state(struct rndis_device *rdev,
+				 struct rndis_request *request)
+{
+	u32 link_status;
+	struct rndis_query_complete *query_complete;
+
+	query_complete = &request->response_msg.msg.query_complete;
+
+	if (query_complete->status == RNDIS_STATUS_SUCCESS &&
+	    query_complete->info_buflen == sizeof(u32)) {
+		memcpy(&link_status, (void *)((unsigned long)query_complete +
+		       query_complete->info_buf_offset), sizeof(u32));
+		rdev->link_state = link_status != 0;
+	}
 }
 
 static void rndis_filter_receive_response(struct rndis_device *dev,
@@ -255,15 +281,20 @@ static void rndis_filter_receive_response(struct rndis_device *dev,
 	spin_unlock_irqrestore(&dev->request_lock, flags);
 
 	if (found) {
-		if (resp->msg_len <= sizeof(struct rndis_message)) {
+		if (resp->msg_len <=
+		    sizeof(struct rndis_message) + RNDIS_EXT_LEN) {
 			memcpy(&request->response_msg, resp,
 			       resp->msg_len);
+			if (request->request_msg.ndis_msg_type ==
+			    RNDIS_MSG_QUERY && request->request_msg.msg.
+			    query_req.oid == RNDIS_OID_GEN_MEDIA_CONNECT_STATUS)
+				rndis_set_link_state(dev, request);
 		} else {
 			netdev_err(ndev,
 				"rndis response buffer overflow "
 				"detected (size %u max %zu)\n",
 				resp->msg_len,
-				sizeof(struct rndis_filter_packet));
+				sizeof(struct rndis_message));
 
 			if (resp->ndis_msg_type ==
 			    RNDIS_MSG_RESET_C) {
@@ -339,13 +370,9 @@ static void rndis_filter_receive_data(struct rndis_device *dev,
 	struct rndis_packet *rndis_pkt;
 	u32 data_offset;
 	struct ndis_pkt_8021q_info *vlan;
+	struct ndis_tcp_ip_checksum_info *csum_info;
 
 	rndis_pkt = &msg->msg.pkt;
-
-	/*
-	 * FIXME: Handle multiple rndis pkt msgs that maybe enclosed in this
-	 * netvsc packet (ie TotalDataBufferLength != MessageLength)
-	 */
 
 	/* Remove the rndis header and pass it back up the stack */
 	data_offset = RNDIS_HEADER_SIZE + rndis_pkt->data_offset;
@@ -382,7 +409,8 @@ static void rndis_filter_receive_data(struct rndis_device *dev,
 		pkt->vlan_tci = 0;
 	}
 
-	netvsc_recv_callback(dev->net_dev->dev, pkt);
+	csum_info = rndis_get_ppi(rndis_pkt, TCPIP_CHKSUM_PKTINFO);
+	netvsc_recv_callback(dev->net_dev->dev, pkt, csum_info);
 }
 
 int rndis_filter_receive(struct hv_device *dev,
@@ -392,9 +420,12 @@ int rndis_filter_receive(struct hv_device *dev,
 	struct rndis_device *rndis_dev;
 	struct rndis_message *rndis_msg;
 	struct net_device *ndev;
+	int ret = 0;
 
-	if (!net_dev)
-		return -EINVAL;
+	if (!net_dev) {
+		ret = -EINVAL;
+		goto exit;
+	}
 
 	ndev = net_dev->ndev;
 
@@ -402,14 +433,16 @@ int rndis_filter_receive(struct hv_device *dev,
 	if (!net_dev->extension) {
 		netdev_err(ndev, "got rndis message but no rndis device - "
 			  "dropping this message!\n");
-		return -ENODEV;
+		ret = -ENODEV;
+		goto exit;
 	}
 
 	rndis_dev = (struct rndis_device *)net_dev->extension;
 	if (rndis_dev->state == RNDIS_DEV_UNINITIALIZED) {
 		netdev_err(ndev, "got rndis message but rndis device "
 			   "uninitialized...dropping this message!\n");
-		return -ENODEV;
+		ret = -ENODEV;
+		goto exit;
 	}
 
 	rndis_msg = pkt->data;
@@ -441,7 +474,11 @@ int rndis_filter_receive(struct hv_device *dev,
 		break;
 	}
 
-	return 0;
+exit:
+	if (ret != 0)
+		pkt->status = NVSP_STAT_FAIL;
+
+	return ret;
 }
 
 static int rndis_filter_query_device(struct rndis_device *dev, u32 oid,
@@ -580,8 +617,11 @@ int rndis_filter_set_device_mac(struct hv_device *hdev, char *mac)
 		return -EBUSY;
 	} else {
 		set_complete = &request->response_msg.msg.set_complete;
-		if (set_complete->status != RNDIS_STATUS_SUCCESS)
+		if (set_complete->status != RNDIS_STATUS_SUCCESS) {
+			netdev_err(ndev, "Fail to set MAC on host side:0x%x\n",
+				   set_complete->status);
 			ret = -EINVAL;
+		}
 	}
 
 cleanup:
@@ -589,6 +629,71 @@ cleanup:
 	return ret;
 }
 
+int rndis_filter_set_offload_params(struct hv_device *hdev,
+				struct ndis_offload_params *req_offloads)
+{
+	struct netvsc_device *nvdev = hv_get_drvdata(hdev);
+	struct rndis_device *rdev = nvdev->extension;
+	struct net_device *ndev = nvdev->ndev;
+	struct rndis_request *request;
+	struct rndis_set_request *set;
+	struct ndis_offload_params *offload_params;
+	struct rndis_set_complete *set_complete;
+	u32 extlen = sizeof(struct ndis_offload_params);
+	int ret, t;
+	u32 vsp_version = nvdev->nvsp_version;
+
+	if (vsp_version <= NVSP_PROTOCOL_VERSION_4) {
+		extlen = VERSION_4_OFFLOAD_SIZE;
+		/* On NVSP_PROTOCOL_VERSION_4 and below, we do not support
+		 * UDP checksum offload.
+		 */
+		req_offloads->udp_ip_v4_csum = 0;
+		req_offloads->udp_ip_v6_csum = 0;
+	}
+
+	request = get_rndis_request(rdev, RNDIS_MSG_SET,
+		RNDIS_MESSAGE_SIZE(struct rndis_set_request) + extlen);
+	if (!request)
+		return -ENOMEM;
+
+	set = &request->request_msg.msg.set_req;
+	set->oid = OID_TCP_OFFLOAD_PARAMETERS;
+	set->info_buflen = extlen;
+	set->info_buf_offset = sizeof(struct rndis_set_request);
+	set->dev_vc_handle = 0;
+
+	offload_params = (struct ndis_offload_params *)((ulong)set +
+				set->info_buf_offset);
+	*offload_params = *req_offloads;
+	offload_params->header.type = NDIS_OBJECT_TYPE_DEFAULT;
+	offload_params->header.revision = NDIS_OFFLOAD_PARAMETERS_REVISION_3;
+	offload_params->header.size = extlen;
+
+	ret = rndis_filter_send_request(rdev, request);
+	if (ret != 0)
+		goto cleanup;
+
+	t = wait_for_completion_timeout(&request->wait_event, 5*HZ);
+	if (t == 0) {
+		netdev_err(ndev, "timeout before we got aOFFLOAD set response...\n");
+		/* can't put_rndis_request, since we may still receive a
+		 * send-completion.
+		 */
+		return -EBUSY;
+	} else {
+		set_complete = &request->response_msg.msg.set_complete;
+		if (set_complete->status != RNDIS_STATUS_SUCCESS) {
+			netdev_err(ndev, "Fail to set offload on host side:0x%x\n",
+				   set_complete->status);
+			ret = -EINVAL;
+		}
+	}
+
+cleanup:
+	put_rndis_request(rdev, request);
+	return ret;
+}
 
 static int rndis_filter_query_device_link_status(struct rndis_device *dev)
 {
@@ -599,7 +704,6 @@ static int rndis_filter_query_device_link_status(struct rndis_device *dev)
 	ret = rndis_filter_query_device(dev,
 				      RNDIS_OID_GEN_MEDIA_CONNECT_STATUS,
 				      &link_status, &size);
-	dev->link_state = (link_status != 0) ? true : false;
 
 	return ret;
 }
@@ -641,6 +745,7 @@ int rndis_filter_set_packet_filter(struct rndis_device *dev, u32 new_filter)
 	if (t == 0) {
 		netdev_err(ndev,
 			"timeout before we got a set response...\n");
+		ret = -ETIMEDOUT;
 		/*
 		 * We can't deallocate the request since we may still receive a
 		 * send completion for it.
@@ -678,8 +783,7 @@ static int rndis_filter_init_device(struct rndis_device *dev)
 	init = &request->request_msg.msg.init_req;
 	init->major_ver = RNDIS_MAJOR_VERSION;
 	init->minor_ver = RNDIS_MINOR_VERSION;
-	/* FIXME: Use 1536 - rounded ethernet frame size */
-	init->max_xfer_size = 2048;
+	init->max_xfer_size = 0x4000;
 
 	dev->state = RNDIS_DEV_INITIALIZING;
 
@@ -789,6 +893,7 @@ int rndis_filter_device_add(struct hv_device *dev,
 	struct netvsc_device *net_device;
 	struct rndis_device *rndis_device;
 	struct netvsc_device_info *device_info = additional_info;
+	struct ndis_offload_params offloads;
 
 	rndis_device = get_rndis_device();
 	if (!rndis_device)
@@ -828,6 +933,26 @@ int rndis_filter_device_add(struct hv_device *dev,
 
 	memcpy(device_info->mac_adr, rndis_device->hw_mac_adr, ETH_ALEN);
 
+	/* Turn on the offloads; the host supports all of the relevant
+	 * offloads.
+	 */
+	memset(&offloads, 0, sizeof(struct ndis_offload_params));
+	/* A value of zero means "no change"; now turn on what we
+	 * want.
+	 */
+	offloads.ip_v4_csum = NDIS_OFFLOAD_PARAMETERS_TX_RX_ENABLED;
+	offloads.tcp_ip_v4_csum = NDIS_OFFLOAD_PARAMETERS_TX_RX_ENABLED;
+	offloads.udp_ip_v4_csum = NDIS_OFFLOAD_PARAMETERS_TX_RX_ENABLED;
+	offloads.tcp_ip_v6_csum = NDIS_OFFLOAD_PARAMETERS_TX_RX_ENABLED;
+	offloads.udp_ip_v6_csum = NDIS_OFFLOAD_PARAMETERS_TX_RX_ENABLED;
+	offloads.lso_v2_ipv4 = NDIS_OFFLOAD_PARAMETERS_LSOV2_ENABLED;
+
+
+	ret = rndis_filter_set_offload_params(dev, &offloads);
+	if (ret)
+		goto err_dev_remv;
+
+
 	rndis_filter_query_device_link_status(rndis_device);
 
 	device_info->link_state = rndis_device->link_state;
@@ -836,6 +961,10 @@ int rndis_filter_device_add(struct hv_device *dev,
 		 rndis_device->hw_mac_adr,
 		 device_info->link_state ? "down" : "up");
 
+	return ret;
+
+err_dev_remv:
+	rndis_filter_device_remove(dev);
 	return ret;
 }
 
@@ -872,108 +1001,4 @@ int rndis_filter_close(struct hv_device *dev)
 		return -EINVAL;
 
 	return rndis_filter_close_device(nvdev->extension);
-}
-
-int rndis_filter_send(struct hv_device *dev,
-			     struct hv_netvsc_packet *pkt)
-{
-	int ret;
-	struct rndis_filter_packet *filter_pkt;
-	struct rndis_message *rndis_msg;
-	struct rndis_packet *rndis_pkt;
-	u32 rndis_msg_size;
-	bool isvlan = pkt->vlan_tci & VLAN_TAG_PRESENT;
-
-	/* Add the rndis header */
-	filter_pkt = (struct rndis_filter_packet *)pkt->extension;
-
-	rndis_msg = &filter_pkt->msg;
-	rndis_msg_size = RNDIS_MESSAGE_SIZE(struct rndis_packet);
-	if (isvlan)
-		rndis_msg_size += NDIS_VLAN_PPI_SIZE;
-
-	rndis_msg->ndis_msg_type = RNDIS_MSG_PACKET;
-	rndis_msg->msg_len = pkt->total_data_buflen +
-				      rndis_msg_size;
-
-	rndis_pkt = &rndis_msg->msg.pkt;
-	rndis_pkt->data_offset = sizeof(struct rndis_packet);
-	if (isvlan)
-		rndis_pkt->data_offset += NDIS_VLAN_PPI_SIZE;
-	rndis_pkt->data_len = pkt->total_data_buflen;
-
-	if (isvlan) {
-		struct rndis_per_packet_info *ppi;
-		struct ndis_pkt_8021q_info *vlan;
-
-		rndis_pkt->per_pkt_info_offset = sizeof(struct rndis_packet);
-		rndis_pkt->per_pkt_info_len = NDIS_VLAN_PPI_SIZE;
-
-		ppi = (struct rndis_per_packet_info *)((ulong)rndis_pkt +
-			rndis_pkt->per_pkt_info_offset);
-		ppi->size = NDIS_VLAN_PPI_SIZE;
-		ppi->type = IEEE_8021Q_INFO;
-		ppi->ppi_offset = sizeof(struct rndis_per_packet_info);
-
-		vlan = (struct ndis_pkt_8021q_info *)((ulong)ppi +
-			ppi->ppi_offset);
-		vlan->vlanid = pkt->vlan_tci & VLAN_VID_MASK;
-		vlan->pri = (pkt->vlan_tci & VLAN_PRIO_MASK) >> VLAN_PRIO_SHIFT;
-	}
-
-	pkt->is_data_pkt = true;
-	pkt->page_buf[0].pfn = virt_to_phys(rndis_msg) >> PAGE_SHIFT;
-	pkt->page_buf[0].offset =
-			(unsigned long)rndis_msg & (PAGE_SIZE-1);
-	pkt->page_buf[0].len = rndis_msg_size;
-
-	/* Add one page_buf if the rndis msg goes beyond page boundary */
-	if (pkt->page_buf[0].offset + rndis_msg_size > PAGE_SIZE) {
-		int i;
-		for (i = pkt->page_buf_cnt; i > 1; i--)
-			pkt->page_buf[i] = pkt->page_buf[i-1];
-		pkt->page_buf_cnt++;
-		pkt->page_buf[0].len = PAGE_SIZE - pkt->page_buf[0].offset;
-		pkt->page_buf[1].pfn = virt_to_phys((void *)((ulong)
-			rndis_msg + pkt->page_buf[0].len)) >> PAGE_SHIFT;
-		pkt->page_buf[1].offset = 0;
-		pkt->page_buf[1].len = rndis_msg_size - pkt->page_buf[0].len;
-	}
-
-	/* Save the packet send completion and context */
-	filter_pkt->completion = pkt->completion.send.send_completion;
-	filter_pkt->completion_ctx =
-				pkt->completion.send.send_completion_ctx;
-
-	/* Use ours */
-	pkt->completion.send.send_completion = rndis_filter_send_completion;
-	pkt->completion.send.send_completion_ctx = filter_pkt;
-
-	ret = netvsc_send(dev, pkt);
-	if (ret != 0) {
-		/*
-		 * Reset the completion to originals to allow retries from
-		 * above
-		 */
-		pkt->completion.send.send_completion =
-				filter_pkt->completion;
-		pkt->completion.send.send_completion_ctx =
-				filter_pkt->completion_ctx;
-	}
-
-	return ret;
-}
-
-static void rndis_filter_send_completion(void *ctx)
-{
-	struct rndis_filter_packet *filter_pkt = ctx;
-
-	/* Pass it back to the original handler */
-	filter_pkt->completion(filter_pkt->completion_ctx);
-}
-
-
-static void rndis_filter_send_request_completion(void *ctx)
-{
-	/* Noop */
 }
