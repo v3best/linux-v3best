@@ -1464,7 +1464,7 @@ static int goodix_ts_probe(struct i2c_client *client, const struct i2c_device_id
 	gtp_sleep(1);
     //do NOT remove these output log
     GTP_INFO("GTP Driver Version:%s",GTP_DRIVER_VERSION);
-    GTP_INFO("GTP Driver build@%s,%s", __TIME__,__DATE__);
+    //GTP_INFO("GTP Driver build@%s,%s", __TIME__,__DATE__);
     GTP_INFO("GTP I2C address:0x%02x", client->addr);
 	//printk("gandy-----start gt818 probe\n");
     i2c_connect_client = client;
@@ -1488,12 +1488,15 @@ static int goodix_ts_probe(struct i2c_client *client, const struct i2c_device_id
  /*************************************************/
 #define pen_irq_pin              54
 #define wake_pin              57
-    /*if ((gpio_request(wake_pin, CTP_NAME)) < 0)
+    if ((gpio_request(wake_pin, CTP_NAME)) < 0)
     {
         printk(KERN_ERR "unable to request gpio\n");
     }
     gpio_direction_output(wake_pin, 0);
-*/
+    mdelay(30);
+    gpio_direction_output(wake_pin, 1);
+    gpio_free(wake_pin);
+
     if ((gpio_request(pen_irq_pin, CTP_NAME)) < 0)
     {
         printk(KERN_ERR "unable to request gpio\n");
